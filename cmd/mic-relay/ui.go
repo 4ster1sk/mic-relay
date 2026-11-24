@@ -69,7 +69,6 @@ type RelayApp struct {
 	txRNNoiseCheck    *widget.Check
 	txGateCheck       *widget.Check
 	txGateLabel       *widget.Label
-	txMuteBtn         *widget.Button
 	txPeerTable       *widget.Table
 	txPeersMu         sync.RWMutex
 	txPeerRows        []peerRow

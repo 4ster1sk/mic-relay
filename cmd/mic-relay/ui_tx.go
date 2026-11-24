@@ -161,10 +161,6 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	})
 	ra.txGateCheck.Checked = ra.cfg.TX.NoiseGateEnabled
 
-	ra.txMuteBtn = widget.NewButton("マイク有効中 — クリックでミュート", func() {
-		ra.toggleTXMute()
-	})
-
 	micCard := widget.NewCard("1. 入力マイク・音声処理", "", container.NewVBox(
 		container.NewBorder(nil, nil, widget.NewLabel("入力マイク"), refreshMicBtn, ra.txMicSelect),
 		ra.txLoopWarnLabel,
@@ -174,7 +170,6 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 			ra.txRNNoiseCheck,
 			container.NewBorder(nil, nil, ra.txGateCheck, ra.txGateLabel, gateSlider),
 		),
-		ra.txMuteBtn,
 	))
 
 	// ---- Section 2: Destination Peer Aligned Table ----
@@ -504,14 +499,6 @@ func (ra *RelayApp) deleteSelectedPreset() {
 func (ra *RelayApp) toggleTXMute() {
 	next := !ra.txDSP.IsMuted()
 	ra.txDSP.SetMuted(next)
-	if next {
-		ra.txMuteBtn.SetText("🔇 ミュート中 — クリックで解除")
-		ra.txMuteBtn.Importance = widget.DangerImportance
-	} else {
-		ra.txMuteBtn.SetText("マイク有効中 — クリックでミュート")
-		ra.txMuteBtn.Importance = widget.MediumImportance
-	}
-	ra.txMuteBtn.Refresh()
 	ra.syncTrayState()
 }
 
