@@ -466,9 +466,17 @@ func (ra *RelayApp) onCaptureFrame(frame []float32) {
 	if ra.denoiser != nil {
 		ra.denoiser.Process(frame)
 	}
-	// 2. DSP (Gain, Noise Gate, Smooth Mute, Soft Limiter, live VU meter)
+	// 2. Optional Pure-Go Voice Changer (Pitch + Formant + HPF)
+	if ra.voiceChanger != nil {
+		ra.voiceChanger.Process(frame)
+	}
+	// 3. DSP (Gain, Noise Gate, Smooth Mute, Soft Limiter, live VU meter)
 	ra.txDSP.Process(frame)
-	// 3. Encode & UDP Transmit only while actively streaming
+	// 4. Optional local speaker/headphone preview
+	if ra.monitorEnabled.Load() && ra.monitorBuf != nil {
+		ra.monitorBuf.Write(frame)
+	}
+	// 5. Encode & UDP Transmit only while actively streaming
 	if ra.sender.IsRunning() {
 		_ = ra.sender.SendFrame(frame)
 	}

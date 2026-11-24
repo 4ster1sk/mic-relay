@@ -52,6 +52,14 @@ func main() {
 		log.Printf("rnnoise init warning (noise suppression disabled): %v", err)
 	}
 
+	voiceChanger := dsp.NewVoiceChanger(protocol.SampleRate)
+	voiceChanger.SetParams(
+		cfg.TX.VoiceChanger.PitchSemitones,
+		cfg.TX.VoiceChanger.FormantRatio,
+		cfg.TX.VoiceChanger.HighPassEnabled,
+	)
+	voiceChanger.SetEnabled(cfg.TX.VoiceChanger.Enabled)
+
 	jb := jitter.NewBuffer(protocol.SampleRate, cfg.RX.TargetBufferMs)
 
 	a := app.NewWithID("dev.antigravity.micrelay")
@@ -72,13 +80,16 @@ func main() {
 		cfgPath:    cfgPath,
 		cfg:        cfg,
 		instanceID: instanceID,
-		txDSP:      txDSP,
-		rxDSP:      rxDSP,
-		denoiser:   denoiser,
-		jb:         jb,
-		capturer:   audio.NewCapturer(),
-		player:     audio.NewPlayer(),
-		virtualMic: audio.NewVirtualMic(),
+		txDSP:         txDSP,
+		rxDSP:         rxDSP,
+		denoiser:      denoiser,
+		voiceChanger:  voiceChanger,
+		jb:            jb,
+		capturer:      audio.NewCapturer(),
+		player:        audio.NewPlayer(),
+		monitorPlayer: audio.NewPlayer(),
+		monitorBuf:    newMonitorRing(),
+		virtualMic:    audio.NewVirtualMic(),
 		sender:     netrelay.NewSender(instanceID),
 		receiver:   netrelay.NewReceiver(instanceID, cfg.RX.DisplayName, jb),
 		discovery:  netrelay.NewDiscoveryResponder(instanceID, cfg.RX.DisplayName, cfg.RX.ListenPort),

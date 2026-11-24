@@ -39,16 +39,20 @@ type RelayApp struct {
 	cfg        config.Config
 	instanceID string
 
-	txDSP      *dsp.Processor
-	rxDSP      *dsp.Processor
-	denoiser   *dsp.Denoiser
-	jb         *jitter.Buffer
-	capturer   *audio.Capturer
-	player     *audio.Player
-	virtualMic *audio.VirtualMic
-	sender     *netrelay.Sender
-	receiver   *netrelay.Receiver
-	discovery  *netrelay.DiscoveryResponder
+	txDSP          *dsp.Processor
+	rxDSP          *dsp.Processor
+	denoiser       *dsp.Denoiser
+	voiceChanger   *dsp.VoiceChanger
+	jb             *jitter.Buffer
+	capturer       *audio.Capturer
+	player         *audio.Player
+	monitorPlayer  *audio.Player
+	monitorBuf     *monitorRing
+	monitorEnabled atomic.Bool
+	virtualMic     *audio.VirtualMic
+	sender         *netrelay.Sender
+	receiver       *netrelay.Receiver
+	discovery      *netrelay.DiscoveryResponder
 
 	tray         *uiutil.TrayController
 	stopTicker   chan struct{}
@@ -56,11 +60,13 @@ type RelayApp struct {
 	shuttingDown atomic.Bool
 
 	// Top main menu bar
-	mainMenu        *fyne.MainMenu
-	menuCodecPCM    *fyne.MenuItem
-	menuCodecOpus96 *fyne.MenuItem
-	menuCodecOpus48 *fyne.MenuItem
-	menuMinToTray   *fyne.MenuItem
+	mainMenu          *fyne.MainMenu
+	menuCodecPCM      *fyne.MenuItem
+	menuCodecOpus96   *fyne.MenuItem
+	menuCodecOpus48   *fyne.MenuItem
+	menuVCEnable      *fyne.MenuItem
+	menuVCLocalMon    *fyne.MenuItem
+	menuMinToTray     *fyne.MenuItem
 
 	// Top always-visible dual status strip
 	txStripLabel *widget.Label
@@ -159,6 +165,39 @@ func (ra *RelayApp) buildMainMenu() {
 		ra.menuCodecOpus48,
 	)
 
+	ra.menuVCEnable = fyne.NewMenuItem("ボイスチェンジャー有効", func() {
+		next := !(ra.voiceChanger != nil && ra.voiceChanger.IsEnabled())
+		ra.setVoiceChangerEnabled(next)
+	})
+	itemVCFemaleNat := fyne.NewMenuItem("プリセット: 女声（ナチュラル）", func() {
+		ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
+	})
+	itemVCFemaleHigh := fyne.NewMenuItem("プリセット: 女声（高め・アニメ調）", func() {
+		ra.applyVoiceChangerPreset(dsp.PresetFemaleHigh, true)
+	})
+	itemVCAndro := fyne.NewMenuItem("プリセット: 中性・少年声", func() {
+		ra.applyVoiceChangerPreset(dsp.PresetAndrogynous, true)
+	})
+	ra.menuVCLocalMon = fyne.NewMenuItem("ローカル試聴 (スピーカーで確認)", func() {
+		next := !ra.monitorEnabled.Load()
+		if err := ra.setLocalMonitorEnabled(next); err != nil {
+			ra.showError("ローカル試聴エラー", err)
+		}
+	})
+	itemVCDetail := fyne.NewMenuItem("詳細調整・ローカル試聴...", func() {
+		ra.showVoiceChangerDialog()
+	})
+	vcMenu := fyne.NewMenu("ボイチェン",
+		ra.menuVCEnable,
+		fyne.NewMenuItemSeparator(),
+		itemVCFemaleNat,
+		itemVCFemaleHigh,
+		itemVCAndro,
+		fyne.NewMenuItemSeparator(),
+		ra.menuVCLocalMon,
+		itemVCDetail,
+	)
+
 	ra.menuMinToTray = fyne.NewMenuItem("閉じるでトレイに最小化", func() {
 		ra.cfgMu.Lock()
 		next := !ra.cfg.MinimizeToTray
@@ -176,7 +215,7 @@ func (ra *RelayApp) buildMainMenu() {
 		itemQuit,
 	)
 
-	ra.mainMenu = fyne.NewMainMenu(qualityMenu, settingsMenu)
+	ra.mainMenu = fyne.NewMainMenu(qualityMenu, vcMenu, settingsMenu)
 	ra.syncMenuState()
 	ra.win.SetMainMenu(ra.mainMenu)
 }
@@ -204,6 +243,8 @@ func (ra *RelayApp) syncMenuState() {
 	ra.menuCodecPCM.Checked = mode == config.CodecModePCM || mode == ""
 	ra.menuCodecOpus96.Checked = mode == config.CodecModeOpus96
 	ra.menuCodecOpus48.Checked = mode == config.CodecModeOpus48
+	ra.menuVCEnable.Checked = ra.voiceChanger != nil && ra.voiceChanger.IsEnabled()
+	ra.menuVCLocalMon.Checked = ra.monitorEnabled.Load()
 	ra.menuMinToTray.Checked = minToTray
 	ra.mainMenu.Refresh()
 }
@@ -225,6 +266,12 @@ func (ra *RelayApp) setupTrayAndClose() {
 					next := !ra.denoiser.IsEnabled()
 					ra.txRNNoiseCheck.SetChecked(next)
 				}
+			})
+		},
+		OnToggleVC: func() {
+			fyne.Do(func() {
+				next := !(ra.voiceChanger != nil && ra.voiceChanger.IsEnabled())
+				ra.setVoiceChangerEnabled(next)
 			})
 		},
 		OnToggleTXRun: func() {
@@ -270,10 +317,12 @@ func (ra *RelayApp) syncTrayState() {
 		return
 	}
 	rnOn := ra.denoiser != nil && ra.denoiser.IsEnabled()
+	vcOn := ra.voiceChanger != nil && ra.voiceChanger.IsEnabled()
 	ra.tray.UpdateState(
 		ra.sender.IsRunning(),
 		ra.txDSP.IsMuted(),
 		rnOn,
+		vcOn,
 		ra.receiver.IsRunning(),
 		ra.rxDSP.IsMuted(),
 	)
@@ -350,15 +399,23 @@ func (ra *RelayApp) uiRefreshLoop() {
 				ra.rxDBLabel.SetText(fmt.Sprintf("%5.1f dB", rxRMS))
 
 				// Top TX Status Strip
+				vcTag := ""
+				if ra.voiceChanger != nil && ra.voiceChanger.IsEnabled() {
+					vcTag = " [VC]"
+				}
+				monTag := ""
+				if ra.monitorEnabled.Load() {
+					monTag = " [試聴]"
+				}
 				if txStats.Connected {
 					muteStr := ""
 					if ra.txDSP.IsMuted() {
 						muteStr = " [MUTE]"
 					}
-					ra.txStripLabel.SetText(fmt.Sprintf("● TX 送信中%s → %s (%s %dk / RTT %.1fms)",
-						muteStr, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
+					ra.txStripLabel.SetText(fmt.Sprintf("● TX 送信中%s%s%s → %s (%s %dk / RTT %.1fms)",
+						muteStr, vcTag, monTag, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
 				} else {
-					ra.txStripLabel.SetText("○ TX 停止中")
+					ra.txStripLabel.SetText("○ TX 停止中" + vcTag + monTag)
 				}
 
 				// Top RX Status Strip & Diagnostics
@@ -392,6 +449,10 @@ func (ra *RelayApp) shutdown() {
 	ra.stopOnce.Do(func() {
 		ra.shuttingDown.Store(true)
 		close(ra.stopTicker)
+		ra.monitorEnabled.Store(false)
+		if ra.monitorPlayer != nil {
+			ra.monitorPlayer.Stop()
+		}
 		ra.stopTX()
 		ra.capturer.Stop()
 		ra.stopRX()

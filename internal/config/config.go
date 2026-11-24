@@ -23,16 +23,24 @@ type PeerPreset struct {
 	Port int    `json:"port"`
 }
 
+type VoiceChangerConfig struct {
+	Enabled         bool    `json:"enabled"`
+	PitchSemitones  float64 `json:"pitch_semitones"`
+	FormantRatio    float64 `json:"formant_ratio"`
+	HighPassEnabled bool    `json:"high_pass_enabled"`
+}
+
 type TXConfig struct {
-	InputDevice      string       `json:"input_device"`
-	GainDB           float64      `json:"gain_db"`
-	NoiseSuppression bool         `json:"noise_suppression"`
-	NoiseGateEnabled bool         `json:"noise_gate_enabled"`
-	GateThresholdDB  float64      `json:"gate_threshold_db"`
-	CodecMode        CodecMode    `json:"codec_mode"`
-	TargetHost       string       `json:"target_host"`
-	TargetPort       int          `json:"target_port"`
-	Presets          []PeerPreset `json:"presets"`
+	InputDevice      string             `json:"input_device"`
+	GainDB           float64            `json:"gain_db"`
+	NoiseSuppression bool               `json:"noise_suppression"`
+	NoiseGateEnabled bool               `json:"noise_gate_enabled"`
+	GateThresholdDB  float64            `json:"gate_threshold_db"`
+	VoiceChanger     VoiceChangerConfig `json:"voice_changer"`
+	CodecMode        CodecMode          `json:"codec_mode"`
+	TargetHost       string             `json:"target_host"`
+	TargetPort       int                `json:"target_port"`
+	Presets          []PeerPreset       `json:"presets"`
 }
 
 type RXConfig struct {
@@ -66,9 +74,15 @@ func Default() Config {
 			NoiseSuppression: true,
 			NoiseGateEnabled: false,
 			GateThresholdDB:  -45.0,
-			CodecMode:        CodecModePCM,
-			TargetPort:       protocol.DefaultAudioPort,
-			Presets:          []PeerPreset{},
+			VoiceChanger: VoiceChangerConfig{
+				Enabled:         false,
+				PitchSemitones:  5.0,
+				FormantRatio:    1.18,
+				HighPassEnabled: true,
+			},
+			CodecMode:  CodecModePCM,
+			TargetPort: protocol.DefaultAudioPort,
+			Presets:    []PeerPreset{},
 		},
 		RX: RXConfig{
 			AutoCreatePipeWireMic: runtime.GOOS == "linux",
@@ -113,6 +127,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.TX.CodecMode == "" {
 		cfg.TX.CodecMode = CodecModePCM
+	}
+	if cfg.TX.VoiceChanger.FormantRatio < 0.75 || cfg.TX.VoiceChanger.FormantRatio > 1.45 {
+		cfg.TX.VoiceChanger.FormantRatio = 1.18
 	}
 	return cfg, nil
 }

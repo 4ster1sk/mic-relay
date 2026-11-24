@@ -6,23 +6,25 @@ import (
 )
 
 type TrayCallbacks struct {
-	OnShow           func()
-	OnToggleTXMute   func()
-	OnToggleRNNoise  func()
-	OnToggleTXRun    func()
-	OnToggleRXMute   func()
-	OnToggleRXRun    func()
-	OnQuit           func()
+	OnShow          func()
+	OnToggleTXMute  func()
+	OnToggleRNNoise func()
+	OnToggleVC      func()
+	OnToggleTXRun   func()
+	OnToggleRXMute  func()
+	OnToggleRXRun   func()
+	OnQuit          func()
 }
 
 type TrayController struct {
-	desk         desktop.App
-	itemTXMute   *fyne.MenuItem
-	itemRNNoise  *fyne.MenuItem
-	itemTXRun    *fyne.MenuItem
-	itemRXMute   *fyne.MenuItem
-	itemRXRun    *fyne.MenuItem
-	menu         *fyne.Menu
+	desk        desktop.App
+	itemTXMute  *fyne.MenuItem
+	itemRNNoise *fyne.MenuItem
+	itemVC      *fyne.MenuItem
+	itemTXRun   *fyne.MenuItem
+	itemRXMute  *fyne.MenuItem
+	itemRXRun   *fyne.MenuItem
+	menu        *fyne.Menu
 }
 
 // SetupTray registers the system tray icon & menu if the platform supports desktop.App.
@@ -46,6 +48,11 @@ func SetupTray(a fyne.App, cb TrayCallbacks) *TrayController {
 	tc.itemRNNoise = fyne.NewMenuItem("TX ノイズ抑制 RNNoise (ON)", func() {
 		if cb.OnToggleRNNoise != nil {
 			cb.OnToggleRNNoise()
+		}
+	})
+	tc.itemVC = fyne.NewMenuItem("TX ボイチェン切替 (OFF)", func() {
+		if cb.OnToggleVC != nil {
+			cb.OnToggleVC()
 		}
 	})
 	tc.itemTXRun = fyne.NewMenuItem("TX 送信を開始", func() {
@@ -75,6 +82,7 @@ func SetupTray(a fyne.App, cb TrayCallbacks) *TrayController {
 		fyne.NewMenuItemSeparator(),
 		tc.itemTXMute,
 		tc.itemRNNoise,
+		tc.itemVC,
 		tc.itemTXRun,
 		fyne.NewMenuItemSeparator(),
 		tc.itemRXMute,
@@ -88,7 +96,7 @@ func SetupTray(a fyne.App, cb TrayCallbacks) *TrayController {
 	return tc
 }
 
-func (tc *TrayController) UpdateState(txRunning, txMuted, rnnoiseOn, rxRunning, rxMuted bool) {
+func (tc *TrayController) UpdateState(txRunning, txMuted, rnnoiseOn, vcOn, rxRunning, rxMuted bool) {
 	if tc == nil {
 		return
 	}
@@ -101,6 +109,11 @@ func (tc *TrayController) UpdateState(txRunning, txMuted, rnnoiseOn, rxRunning, 
 		tc.itemRNNoise.Label = "TX ノイズ抑制 RNNoise (ON)"
 	} else {
 		tc.itemRNNoise.Label = "TX ノイズ抑制 RNNoise (OFF)"
+	}
+	if vcOn {
+		tc.itemVC.Label = "TX ボイチェン切替 (ON)"
+	} else {
+		tc.itemVC.Label = "TX ボイチェン切替 (OFF)"
 	}
 	if txRunning {
 		tc.itemTXRun.Label = "TX 送信を停止"

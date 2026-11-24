@@ -34,21 +34,24 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	jb := jitter.NewBuffer(protocol.SampleRate, 30)
 
 	ra := &RelayApp{
-		fyneApp:    a,
-		win:        w,
-		cfgPath:    cfgPath,
-		cfg:        cfg,
-		instanceID: "test-inst",
-		txDSP:      txDSP,
-		rxDSP:      rxDSP,
-		jb:         jb,
-		capturer:   audio.NewCapturer(),
-		player:     audio.NewPlayer(),
-		virtualMic: audio.NewVirtualMic(),
-		sender:     netrelay.NewSender("test-inst"),
-		receiver:   netrelay.NewReceiver("test-inst", "test", jb),
-		discovery:  netrelay.NewDiscoveryResponder("test-inst", "test", 48101),
-		stopTicker: make(chan struct{}),
+		fyneApp:       a,
+		win:           w,
+		cfgPath:       cfgPath,
+		cfg:           cfg,
+		instanceID:    "test-inst",
+		txDSP:         txDSP,
+		rxDSP:         rxDSP,
+		voiceChanger:  dsp.NewVoiceChanger(protocol.SampleRate),
+		jb:            jb,
+		capturer:      audio.NewCapturer(),
+		player:        audio.NewPlayer(),
+		monitorPlayer: audio.NewPlayer(),
+		monitorBuf:    newMonitorRing(),
+		virtualMic:    audio.NewVirtualMic(),
+		sender:        netrelay.NewSender("test-inst"),
+		receiver:      netrelay.NewReceiver("test-inst", "test", jb),
+		discovery:     netrelay.NewDiscoveryResponder("test-inst", "test", 48101),
+		stopTicker:    make(chan struct{}),
 	}
 
 	ra.buildUI()
@@ -76,13 +79,21 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	ra.txVUMeter.SetLevels(rms, peakHold)
 	ra.txDBLabel.SetText("-10.0 dB")
 
-	// Verify main menu codec selection and minimize-to-tray toggle
-	if ra.mainMenu == nil || len(ra.mainMenu.Items) != 2 {
-		t.Fatalf("expected 2 top-level menus (音質, 設定)")
+	// Verify main menu codec selection, voice changer presets, and minimize-to-tray toggle
+	if ra.mainMenu == nil || len(ra.mainMenu.Items) != 3 {
+		t.Fatalf("expected 3 top-level menus (音質, ボイチェン, 設定)")
 	}
 	ra.selectCodecMode(config.CodecModeOpus96)
 	if !ra.menuCodecOpus96.Checked || ra.menuCodecPCM.Checked {
 		t.Fatalf("expected Opus96 menu item checked after selectCodecMode")
+	}
+	ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
+	if !ra.menuVCEnable.Checked || !ra.voiceChanger.IsEnabled() {
+		t.Fatalf("expected voice changer enabled via preset")
+	}
+	ra.setVoiceChangerEnabled(false)
+	if ra.menuVCEnable.Checked || ra.voiceChanger.IsEnabled() {
+		t.Fatalf("expected voice changer disabled")
 	}
 	ra.setMinimizeToTray(false)
 	if ra.menuMinToTray.Checked {
