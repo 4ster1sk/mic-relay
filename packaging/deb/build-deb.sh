@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 0022
 
 if [ "$#" -lt 3 ]; then
   echo "Usage: $0 <version> <binary-path> <output-dir>" >&2
@@ -17,10 +18,10 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
 PKG_ROOT="${WORK_DIR}/${PKG_NAME}_${VERSION}_${ARCH}"
-mkdir -p "${PKG_ROOT}/DEBIAN"
-mkdir -p "${PKG_ROOT}/usr/bin"
-mkdir -p "${PKG_ROOT}/usr/share/applications"
-mkdir -p "${PKG_ROOT}/usr/share/icons/hicolor/scalable/apps"
+mkdir -p -m 0755 "${PKG_ROOT}" "${PKG_ROOT}/DEBIAN"
+mkdir -p -m 0755 "${PKG_ROOT}/usr/bin"
+mkdir -p -m 0755 "${PKG_ROOT}/usr/share/applications"
+mkdir -p -m 0755 "${PKG_ROOT}/usr/share/icons/hicolor/scalable/apps"
 
 install -m 0755 "${BIN_PATH}" "${PKG_ROOT}/usr/bin/mic-relay"
 install -m 0644 "${SCRIPT_DIR}/mic-relay.desktop" "${PKG_ROOT}/usr/share/applications/mic-relay.desktop"
@@ -40,6 +41,8 @@ Description: Bidirectional low-latency microphone relay for Linux (PipeWire) and
  Pure-Go RNNoise noise suppression, PCM/Opus codec switching, adaptive
  clock-drift jitter buffering, and system tray minimization.
 EOF
+chmod 0755 "${PKG_ROOT}/DEBIAN"
+chmod 0644 "${PKG_ROOT}/DEBIAN/control"
 
 mkdir -p "${OUT_DIR}"
 OUT_DEB="${OUT_DIR%/}/${PKG_NAME}_${VERSION}_${ARCH}.deb"
