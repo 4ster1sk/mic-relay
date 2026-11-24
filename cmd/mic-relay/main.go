@@ -53,12 +53,17 @@ func main() {
 	}
 
 	voiceChanger := dsp.NewVoiceChanger(protocol.SampleRate)
-	voiceChanger.SetParams(
-		cfg.TX.VoiceChanger.PitchSemitones,
-		cfg.TX.VoiceChanger.FormantRatio,
-		cfg.TX.VoiceChanger.Softness,
-		cfg.TX.VoiceChanger.HighPassEnabled,
-	)
+	voiceChanger.SetConfig(dsp.VoiceChangerParams{
+		PitchSemitones:  cfg.TX.VoiceChanger.PitchSemitones,
+		FormantRatio:    cfg.TX.VoiceChanger.FormantRatio,
+		ThroatFormant:   cfg.TX.VoiceChanger.ThroatFormant,
+		BrightFormant:   cfg.TX.VoiceChanger.BrightFormant,
+		Breathiness:     cfg.TX.VoiceChanger.Breathiness,
+		Softness:        cfg.TX.VoiceChanger.Softness,
+		HighPassEnabled: cfg.TX.VoiceChanger.HighPassEnabled,
+		HighPassHz:      cfg.TX.VoiceChanger.HighPassHz,
+		DeEsser:         cfg.TX.VoiceChanger.DeEsser,
+	})
 	voiceChanger.SetEnabled(cfg.TX.VoiceChanger.Enabled)
 
 	jb := jitter.NewBuffer(protocol.SampleRate, cfg.RX.TargetBufferMs)

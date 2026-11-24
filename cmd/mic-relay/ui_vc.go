@@ -73,17 +73,23 @@ func (ra *RelayApp) setVoiceChangerEnabled(on bool) {
 }
 
 func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable bool) {
+	params := p.VoiceChangerParams.Clamp()
 	if ra.voiceChanger != nil {
-		ra.voiceChanger.SetParams(p.PitchSemitones, p.FormantRatio, p.Softness, p.HighPassEnabled)
+		ra.voiceChanger.SetConfig(params)
 		if enable {
 			ra.voiceChanger.SetEnabled(true)
 		}
 	}
 	ra.cfgMu.Lock()
-	ra.cfg.TX.VoiceChanger.PitchSemitones = p.PitchSemitones
-	ra.cfg.TX.VoiceChanger.FormantRatio = p.FormantRatio
-	ra.cfg.TX.VoiceChanger.Softness = p.Softness
-	ra.cfg.TX.VoiceChanger.HighPassEnabled = p.HighPassEnabled
+	ra.cfg.TX.VoiceChanger.PitchSemitones = params.PitchSemitones
+	ra.cfg.TX.VoiceChanger.FormantRatio = params.FormantRatio
+	ra.cfg.TX.VoiceChanger.ThroatFormant = params.ThroatFormant
+	ra.cfg.TX.VoiceChanger.BrightFormant = params.BrightFormant
+	ra.cfg.TX.VoiceChanger.Breathiness = params.Breathiness
+	ra.cfg.TX.VoiceChanger.Softness = params.Softness
+	ra.cfg.TX.VoiceChanger.HighPassEnabled = params.HighPassEnabled
+	ra.cfg.TX.VoiceChanger.HighPassHz = params.HighPassHz
+	ra.cfg.TX.VoiceChanger.DeEsser = params.DeEsser
 	if enable {
 		ra.cfg.TX.VoiceChanger.Enabled = true
 	}
@@ -117,7 +123,21 @@ func (ra *RelayApp) setLocalMonitorEnabled(on bool) error {
 	return nil
 }
 
-func (ra *RelayApp) showVoiceChangerDialog() {
+func vcSliderRow(title string, valLabel *widget.Label, slider *widget.Slider) fyne.CanvasObject {
+	lbl := widget.NewLabel(title)
+	valLabel.Alignment = fyne.TextAlignTrailing
+	leftWrap := container.NewGridWrap(fyne.NewSize(172, 28), lbl)
+	rightWrap := container.NewGridWrap(fyne.NewSize(86, 28), valLabel)
+	return container.NewBorder(nil, nil, leftWrap, rightWrap, slider)
+}
+
+func vcSectionHeader(title string) *widget.Label {
+	lbl := widget.NewLabel(title)
+	lbl.TextStyle = fyne.TextStyle{Bold: true}
+	return lbl
+}
+
+func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 	ra.cfgMu.Lock()
 	vcCfg := ra.cfg.TX.VoiceChanger
 	ra.cfgMu.Unlock()
@@ -127,50 +147,116 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 	})
 	enableCheck.Checked = vcCfg.Enabled
 
+	// --- Core Pitch & Formant ---
 	pitchVal := widget.NewLabel(fmt.Sprintf("%+.1f 半音", vcCfg.PitchSemitones))
-	pitchSlider := widget.NewSlider(-12, 12)
+	pitchSlider := widget.NewSlider(-12, 16)
 	pitchSlider.Step = 0.5
 	pitchSlider.Value = vcCfg.PitchSemitones
 
 	formantVal := widget.NewLabel(fmt.Sprintf("%.2fx", vcCfg.FormantRatio))
 	formantSlider := widget.NewSlider(0.75, 1.45)
-	formantSlider.Step = 0.02
+	formantSlider.Step = 0.01
 	formantSlider.Value = vcCfg.FormantRatio
+
+	// --- Independent F1 / F2 Female Formant Shaping ---
+	throatPct := math.Round((vcCfg.ThroatFormant - 1.0) * 100)
+	throatVal := widget.NewLabel(fmt.Sprintf("%+.0f%%", throatPct))
+	throatSlider := widget.NewSlider(-20, 30)
+	throatSlider.Step = 1
+	throatSlider.Value = throatPct
+
+	brightPct := math.Round((vcCfg.BrightFormant - 1.0) * 100)
+	brightVal := widget.NewLabel(fmt.Sprintf("%+.0f%%", brightPct))
+	brightSlider := widget.NewSlider(-20, 30)
+	brightSlider.Step = 1
+	brightSlider.Value = brightPct
+
+	// --- Voice Quality: Breathiness, Softness, De-Esser, Variable HPF ---
+	breathVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Breathiness*100))
+	breathSlider := widget.NewSlider(0, 100)
+	breathSlider.Step = 2
+	breathSlider.Value = vcCfg.Breathiness * 100
 
 	softVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Softness*100))
 	softSlider := widget.NewSlider(0, 100)
-	softSlider.Step = 5
+	softSlider.Step = 2
 	softSlider.Value = vcCfg.Softness * 100
 
-	hpCheck := widget.NewCheck("胸声カット HPF (145Hz) を有効にする", nil)
+	deEssVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.DeEsser*100))
+	deEssSlider := widget.NewSlider(0, 100)
+	deEssSlider.Step = 2
+	deEssSlider.Value = vcCfg.DeEsser * 100
+
+	hpCheck := widget.NewCheck("胸声カット HPF", nil)
 	hpCheck.Checked = vcCfg.HighPassEnabled
 
+	hpHzVal := widget.NewLabel(fmt.Sprintf("%.0f Hz", vcCfg.HighPassHz))
+	hpHzVal.Alignment = fyne.TextAlignTrailing
+	hpHzSlider := widget.NewSlider(80, 280)
+	hpHzSlider.Step = 5
+	hpHzSlider.Value = vcCfg.HighPassHz
+	if !vcCfg.HighPassEnabled {
+		hpHzSlider.Disable()
+	}
+
+	suppressCallbacks := false
 	updateParams := func() {
-		p := math.Round(pitchSlider.Value*2) / 2
-		f := math.Round(formantSlider.Value*100) / 100
-		s := math.Round(softSlider.Value) / 100.0
-		hp := hpCheck.Checked
-		pitchVal.SetText(fmt.Sprintf("%+.1f 半音", p))
-		formantVal.SetText(fmt.Sprintf("%.2fx", f))
-		softVal.SetText(fmt.Sprintf("%.0f%%", s*100))
+		if suppressCallbacks {
+			return
+		}
+		params := dsp.VoiceChangerParams{
+			PitchSemitones:  math.Round(pitchSlider.Value*2) / 2,
+			FormantRatio:    math.Round(formantSlider.Value*100) / 100,
+			ThroatFormant:   1.0 + math.Round(throatSlider.Value)/100.0,
+			BrightFormant:   1.0 + math.Round(brightSlider.Value)/100.0,
+			Breathiness:     math.Round(breathSlider.Value) / 100.0,
+			Softness:        math.Round(softSlider.Value) / 100.0,
+			HighPassEnabled: hpCheck.Checked,
+			HighPassHz:      math.Round(hpHzSlider.Value/5) * 5,
+			DeEsser:         math.Round(deEssSlider.Value) / 100.0,
+		}.Clamp()
+
+		pitchVal.SetText(fmt.Sprintf("%+.1f 半音", params.PitchSemitones))
+		formantVal.SetText(fmt.Sprintf("%.2fx", params.FormantRatio))
+		throatVal.SetText(fmt.Sprintf("%+.0f%%", (params.ThroatFormant-1.0)*100))
+		brightVal.SetText(fmt.Sprintf("%+.0f%%", (params.BrightFormant-1.0)*100))
+		breathVal.SetText(fmt.Sprintf("%.0f%%", params.Breathiness*100))
+		softVal.SetText(fmt.Sprintf("%.0f%%", params.Softness*100))
+		deEssVal.SetText(fmt.Sprintf("%.0f%%", params.DeEsser*100))
+		hpHzVal.SetText(fmt.Sprintf("%.0f Hz", params.HighPassHz))
+
+		if params.HighPassEnabled {
+			hpHzSlider.Enable()
+		} else {
+			hpHzSlider.Disable()
+		}
+
 		if ra.voiceChanger != nil {
-			ra.voiceChanger.SetParams(p, f, s, hp)
+			ra.voiceChanger.SetConfig(params)
 		}
 		ra.cfgMu.Lock()
-		ra.cfg.TX.VoiceChanger.PitchSemitones = p
-		ra.cfg.TX.VoiceChanger.FormantRatio = f
-		ra.cfg.TX.VoiceChanger.Softness = s
-		ra.cfg.TX.VoiceChanger.HighPassEnabled = hp
+		ra.cfg.TX.VoiceChanger.PitchSemitones = params.PitchSemitones
+		ra.cfg.TX.VoiceChanger.FormantRatio = params.FormantRatio
+		ra.cfg.TX.VoiceChanger.ThroatFormant = params.ThroatFormant
+		ra.cfg.TX.VoiceChanger.BrightFormant = params.BrightFormant
+		ra.cfg.TX.VoiceChanger.Breathiness = params.Breathiness
+		ra.cfg.TX.VoiceChanger.Softness = params.Softness
+		ra.cfg.TX.VoiceChanger.HighPassEnabled = params.HighPassEnabled
+		ra.cfg.TX.VoiceChanger.HighPassHz = params.HighPassHz
+		ra.cfg.TX.VoiceChanger.DeEsser = params.DeEsser
 		ra.cfgMu.Unlock()
 		ra.syncMenuState()
 	}
 
-	pitchSlider.OnChanged = func(_ float64) { updateParams() }
-	pitchSlider.OnChangeEnded = func(_ float64) { ra.saveConfig() }
-	formantSlider.OnChanged = func(_ float64) { updateParams() }
-	formantSlider.OnChangeEnded = func(_ float64) { ra.saveConfig() }
-	softSlider.OnChanged = func(_ float64) { updateParams() }
-	softSlider.OnChangeEnded = func(_ float64) { ra.saveConfig() }
+	sliders := []*widget.Slider{
+		pitchSlider, formantSlider,
+		throatSlider, brightSlider,
+		breathSlider, softSlider, deEssSlider, hpHzSlider,
+	}
+	for _, sl := range sliders {
+		sl.OnChanged = func(_ float64) { updateParams() }
+		sl.OnChangeEnded = func(_ float64) { ra.saveConfig() }
+	}
 	hpCheck.OnChanged = func(_ bool) {
 		updateParams()
 		ra.saveConfig()
@@ -178,16 +264,26 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 
 	applyPresetUI := func(p dsp.VoiceChangerPreset) {
 		ra.applyVoiceChangerPreset(p, true)
+		params := p.VoiceChangerParams.Clamp()
+		suppressCallbacks = true
 		enableCheck.SetChecked(true)
-		pitchSlider.SetValue(p.PitchSemitones)
-		formantSlider.SetValue(p.FormantRatio)
-		softSlider.SetValue(p.Softness * 100)
-		hpCheck.SetChecked(p.HighPassEnabled)
+		pitchSlider.SetValue(params.PitchSemitones)
+		formantSlider.SetValue(params.FormantRatio)
+		throatSlider.SetValue(math.Round((params.ThroatFormant - 1.0) * 100))
+		brightSlider.SetValue(math.Round((params.BrightFormant - 1.0) * 100))
+		breathSlider.SetValue(params.Breathiness * 100)
+		softSlider.SetValue(params.Softness * 100)
+		deEssSlider.SetValue(params.DeEsser * 100)
+		hpCheck.SetChecked(params.HighPassEnabled)
+		hpHzSlider.SetValue(params.HighPassHz)
+		suppressCallbacks = false
+		updateParams()
 	}
 
-	presetsRow := container.NewGridWithColumns(3,
+	presetsGrid := container.NewGridWithColumns(2,
 		widget.NewButton("女声ナチュラル", func() { applyPresetUI(dsp.PresetFemaleNatural) }),
-		widget.NewButton("女声高め", func() { applyPresetUI(dsp.PresetFemaleHigh) }),
+		widget.NewButton("女声高め・カワボ", func() { applyPresetUI(dsp.PresetFemaleHigh) }),
+		widget.NewButton("お姉さん・ウィスパー", func() { applyPresetUI(dsp.PresetFemaleWhisper) }),
 		widget.NewButton("中性・少年声", func() { applyPresetUI(dsp.PresetAndrogynous) }),
 	)
 
@@ -200,23 +296,44 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 	})
 	monitorCheck.Checked = ra.monitorEnabled.Load()
 
-	hint := widget.NewLabel("※ ハウリング防止のためヘッドホン・イヤホンでの試聴を推奨します")
+	hint := widget.NewLabel("※ ハウリング防止のためヘッドホン・イヤホンでの試聴を推奨します。地声が低い場合はピッチを +9〜+14 半音付近まで上げて調整してください。")
 	hint.Wrapping = fyne.TextWrapWord
+
+	hpRow := container.NewBorder(
+		nil, nil,
+		container.NewGridWrap(fyne.NewSize(172, 28), hpCheck),
+		container.NewGridWrap(fyne.NewSize(86, 28), hpHzVal),
+		hpHzSlider,
+	)
 
 	body := container.NewVBox(
 		enableCheck,
-		presetsRow,
+		presetsGrid,
 		widget.NewSeparator(),
-		container.NewBorder(nil, nil, widget.NewLabel("ピッチ (音程)"), pitchVal, pitchSlider),
-		container.NewBorder(nil, nil, widget.NewLabel("フォルマント (声質)"), formantVal, formantSlider),
-		container.NewBorder(nil, nil, widget.NewLabel("柔らかさ (息・丸み)"), softVal, softSlider),
-		hpCheck,
+		vcSectionHeader("基本調整（音程・声道長）"),
+		vcSliderRow("ピッチ (音程)", pitchVal, pitchSlider),
+		vcSliderRow("フォルマント全体", formantVal, formantSlider),
+		widget.NewSeparator(),
+		vcSectionHeader("女声フォルマント微調整（F1 / F2）"),
+		vcSliderRow("喉の細さ (F1 低域)", throatVal, throatSlider),
+		vcSliderRow("声の明るさ (F2 高域)", brightVal, brightSlider),
+		widget.NewSeparator(),
+		vcSectionHeader("声質・息・仕上げ"),
+		vcSliderRow("息成分 (ウィスパー)", breathVal, breathSlider),
+		vcSliderRow("倍音の丸み (柔らかさ)", softVal, softSlider),
+		vcSliderRow("歯擦音抑制 (サ行丸め)", deEssVal, deEssSlider),
+		hpRow,
 		widget.NewSeparator(),
 		monitorCheck,
 		hint,
 	)
 
-	d := dialog.NewCustom("ボイチェン詳細調整・ローカル試聴", "閉じる", body, ra.win)
-	d.Resize(fyne.NewSize(470, 400))
+	return container.NewVScroll(body)
+}
+
+func (ra *RelayApp) showVoiceChangerDialog() {
+	content := ra.buildVoiceChangerContent()
+	d := dialog.NewCustom("ボイチェン詳細調整・ローカル試聴", "閉じる", content, ra.win)
+	d.Resize(fyne.NewSize(580, 660))
 	d.Show()
 }

@@ -27,8 +27,13 @@ type VoiceChangerConfig struct {
 	Enabled         bool    `json:"enabled"`
 	PitchSemitones  float64 `json:"pitch_semitones"`
 	FormantRatio    float64 `json:"formant_ratio"`
+	ThroatFormant   float64 `json:"throat_formant"`
+	BrightFormant   float64 `json:"bright_formant"`
+	Breathiness     float64 `json:"breathiness"`
 	Softness        float64 `json:"softness"`
 	HighPassEnabled bool    `json:"high_pass_enabled"`
+	HighPassHz      float64 `json:"high_pass_hz"`
+	DeEsser         float64 `json:"de_esser"`
 }
 
 type TXConfig struct {
@@ -78,10 +83,15 @@ func Default() Config {
 			GateThresholdDB:  -45.0,
 			VoiceChanger: VoiceChangerConfig{
 				Enabled:         false,
-				PitchSemitones:  4.5,
-				FormantRatio:    1.16,
-				Softness:        0.45,
+				PitchSemitones:  7.5,
+				FormantRatio:    1.18,
+				ThroatFormant:   1.06,
+				BrightFormant:   1.06,
+				Breathiness:     0.22,
+				Softness:        0.55,
 				HighPassEnabled: true,
+				HighPassHz:      170.0,
+				DeEsser:         0.35,
 			},
 			CodecMode:  CodecModePCM,
 			TargetPort: protocol.DefaultAudioPort,
@@ -131,11 +141,29 @@ func Load(path string) (Config, error) {
 	if cfg.TX.CodecMode == "" {
 		cfg.TX.CodecMode = CodecModePCM
 	}
+	if cfg.TX.VoiceChanger.PitchSemitones < -12 || cfg.TX.VoiceChanger.PitchSemitones > 16 {
+		cfg.TX.VoiceChanger.PitchSemitones = 7.5
+	}
 	if cfg.TX.VoiceChanger.FormantRatio < 0.75 || cfg.TX.VoiceChanger.FormantRatio > 1.45 {
-		cfg.TX.VoiceChanger.FormantRatio = 1.16
+		cfg.TX.VoiceChanger.FormantRatio = 1.18
+	}
+	if cfg.TX.VoiceChanger.ThroatFormant < 0.80 || cfg.TX.VoiceChanger.ThroatFormant > 1.30 {
+		cfg.TX.VoiceChanger.ThroatFormant = 1.06
+	}
+	if cfg.TX.VoiceChanger.BrightFormant < 0.80 || cfg.TX.VoiceChanger.BrightFormant > 1.30 {
+		cfg.TX.VoiceChanger.BrightFormant = 1.06
+	}
+	if cfg.TX.VoiceChanger.Breathiness < 0 || cfg.TX.VoiceChanger.Breathiness > 1 {
+		cfg.TX.VoiceChanger.Breathiness = 0.22
 	}
 	if cfg.TX.VoiceChanger.Softness < 0 || cfg.TX.VoiceChanger.Softness > 1 {
-		cfg.TX.VoiceChanger.Softness = 0.45
+		cfg.TX.VoiceChanger.Softness = 0.55
+	}
+	if cfg.TX.VoiceChanger.HighPassHz < 80 || cfg.TX.VoiceChanger.HighPassHz > 280 {
+		cfg.TX.VoiceChanger.HighPassHz = 170.0
+	}
+	if cfg.TX.VoiceChanger.DeEsser < 0 || cfg.TX.VoiceChanger.DeEsser > 1 {
+		cfg.TX.VoiceChanger.DeEsser = 0.35
 	}
 	return cfg, nil
 }

@@ -296,8 +296,11 @@ func (ra *RelayApp) buildMainMenu() {
 	itemVCFemaleNat := fyne.NewMenuItem("プリセット: 女声（ナチュラル）", func() {
 		ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
 	})
-	itemVCFemaleHigh := fyne.NewMenuItem("プリセット: 女声（高め・アニメ調）", func() {
+	itemVCFemaleHigh := fyne.NewMenuItem("プリセット: 女声（高め・カワボ）", func() {
 		ra.applyVoiceChangerPreset(dsp.PresetFemaleHigh, true)
+	})
+	itemVCFemaleWhisper := fyne.NewMenuItem("プリセット: 女声（お姉さん・ウィスパー）", func() {
+		ra.applyVoiceChangerPreset(dsp.PresetFemaleWhisper, true)
 	})
 	itemVCAndro := fyne.NewMenuItem("プリセット: 中性・少年声", func() {
 		ra.applyVoiceChangerPreset(dsp.PresetAndrogynous, true)
@@ -316,6 +319,7 @@ func (ra *RelayApp) buildMainMenu() {
 		fyne.NewMenuItemSeparator(),
 		itemVCFemaleNat,
 		itemVCFemaleHigh,
+		itemVCFemaleWhisper,
 		itemVCAndro,
 		fyne.NewMenuItemSeparator(),
 		ra.menuVCLocalMon,

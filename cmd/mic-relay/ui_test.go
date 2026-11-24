@@ -91,6 +91,15 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if !ra.menuVCEnable.Checked || !ra.voiceChanger.IsEnabled() {
 		t.Fatalf("expected voice changer enabled via preset")
 	}
+	ra.applyVoiceChangerPreset(dsp.PresetFemaleWhisper, true)
+	vcCfg := ra.voiceChanger.Config()
+	if vcCfg.Breathiness != dsp.PresetFemaleWhisper.Breathiness || vcCfg.HighPassHz != dsp.PresetFemaleWhisper.HighPassHz {
+		t.Fatalf("expected whisper preset params applied, got %+v", vcCfg)
+	}
+	// Verify Voice Changer detail dialog builds cleanly without panic
+	if vcUI := ra.buildVoiceChangerContent(); vcUI == nil {
+		t.Fatalf("expected non-nil voice changer dialog content")
+	}
 	ra.setVoiceChangerEnabled(false)
 	if ra.menuVCEnable.Checked || ra.voiceChanger.IsEnabled() {
 		t.Fatalf("expected voice changer disabled")
@@ -157,5 +166,15 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 		ra.tabs.SelectIndex(1)
 		w.Resize(fyne.NewSize(700, 680))
 		saveCapture("rx_menu_700x680.png")
+
+		vcWin := a.NewWindow("ボイチェン詳細調整・ローカル試聴")
+		vcWin.SetContent(ra.buildVoiceChangerContent())
+		vcWin.Resize(fyne.NewSize(580, 680))
+		img := vcWin.Canvas().Capture()
+		if f, err := os.Create(filepath.Join(outDir, "vc_dialog_580x680.png")); err == nil {
+			_ = png.Encode(f, img)
+			_ = f.Close()
+		}
+		vcWin.Close()
 	}
 }
