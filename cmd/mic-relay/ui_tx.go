@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -25,35 +26,49 @@ const (
 )
 
 type responsiveTableLayout struct {
-	table     *widget.Table
-	minHeight float32
+	table       *widget.Table
+	minHeight   float32
+	lastWidth   float32
+	initialized bool
 }
 
 func (l *responsiveTableLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(420, l.minHeight)
 }
 
-func (l *responsiveTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	if len(objects) == 0 {
-		return
-	}
+func (l *responsiveTableLayout) applyColumnWidths(width float32, setFixed bool) {
 	const (
 		col0 = float32(92)
 		col3 = float32(68)
 		pad  = float32(18)
 	)
-	rem := size.Width - col0 - col3 - pad
+	rem := width - col0 - col3 - pad
 	if rem < 200 {
 		rem = 200
 	}
-	col1 := rem * 0.48
-	col2 := rem - col1
-	l.table.SetColumnWidth(0, col0)
+	col1 := float32(int(rem * 0.48))
+	col2 := float32(int(rem)) - col1
+	if setFixed {
+		l.table.SetColumnWidth(0, col0)
+		l.table.SetColumnWidth(3, col3)
+	}
 	l.table.SetColumnWidth(1, col1)
 	l.table.SetColumnWidth(2, col2)
-	l.table.SetColumnWidth(3, col3)
+}
+
+func (l *responsiveTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
 	objects[0].Move(fyne.NewPos(0, 0))
 	objects[0].Resize(size)
+
+	if !l.initialized || math.Abs(float64(size.Width-l.lastWidth)) >= 4 {
+		setFixed := !l.initialized
+		l.lastWidth = size.Width
+		l.initialized = true
+		l.applyColumnWidths(size.Width, setFixed)
+	}
 }
 
 func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
@@ -180,19 +195,19 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 			ra.txPeersMu.RLock()
 			defer ra.txPeersMu.RUnlock()
 			if id.Row < 0 || id.Row >= len(ra.txPeerRows) {
-				lbl.SetText("")
+				setLabelTextIfChanged(lbl, "")
 				return
 			}
 			r := ra.txPeerRows[id.Row]
 			switch id.Col {
 			case 0:
-				lbl.SetText(r.Kind)
+				setLabelTextIfChanged(lbl, r.Kind)
 			case 1:
-				lbl.SetText(r.DisplayName)
+				setLabelTextIfChanged(lbl, r.DisplayName)
 			case 2:
-				lbl.SetText(fmt.Sprintf("%s:%d", r.Host, r.Port))
+				setLabelTextIfChanged(lbl, fmt.Sprintf("%s:%d", r.Host, r.Port))
 			case 3:
-				lbl.SetText(r.RTTText)
+				setLabelTextIfChanged(lbl, r.RTTText)
 			}
 		},
 	)
@@ -206,13 +221,9 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	ra.txPeerTable.UpdateHeader = func(id widget.TableCellID, obj fyne.CanvasObject) {
 		lbl := obj.(*widget.Label)
 		if id.Col >= 0 && id.Col < len(headers) {
-			lbl.SetText(headers[id.Col])
+			setLabelTextIfChanged(lbl, headers[id.Col])
 		}
 	}
-	ra.txPeerTable.SetColumnWidth(0, 96)
-	ra.txPeerTable.SetColumnWidth(1, 175)
-	ra.txPeerTable.SetColumnWidth(2, 180)
-	ra.txPeerTable.SetColumnWidth(3, 72)
 
 	ra.txPeerTable.OnSelected = func(id widget.TableCellID) {
 		ra.txPeersMu.RLock()

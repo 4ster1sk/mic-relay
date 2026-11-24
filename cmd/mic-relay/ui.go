@@ -55,10 +55,11 @@ type RelayApp struct {
 	receiver       *netrelay.Receiver
 	discovery      *netrelay.DiscoveryResponder
 
-	tray         *uiutil.TrayController
-	stopTicker   chan struct{}
-	stopOnce     sync.Once
-	shuttingDown atomic.Bool
+	tray             *uiutil.TrayController
+	stopTicker       chan struct{}
+	stopOnce         sync.Once
+	shuttingDown     atomic.Bool
+	uiRefreshPending atomic.Bool
 
 	// Top main menu bar
 	mainMenu          *fyne.MainMenu
@@ -512,6 +513,12 @@ func (ra *RelayApp) showError(title string, err error) {
 	dialog.ShowError(fmt.Errorf("%s: %w", title, err), ra.win)
 }
 
+func setLabelTextIfChanged(lbl *widget.Label, text string) {
+	if lbl != nil && lbl.Text != text {
+		lbl.SetText(text)
+	}
+}
+
 func (ra *RelayApp) uiRefreshLoop() {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -521,6 +528,9 @@ func (ra *RelayApp) uiRefreshLoop() {
 		case <-ra.stopTicker:
 			return
 		case <-ticker.C:
+			if !ra.uiRefreshPending.CompareAndSwap(false, true) {
+				continue
+			}
 			txRMS, _, txPeakHold := ra.txDSP.Levels()
 			rxRMS, _, rxPeakHold := ra.rxDSP.Levels()
 			txStats := ra.sender.Stats()
@@ -533,24 +543,32 @@ func (ra *RelayApp) uiRefreshLoop() {
 			}
 
 			fyne.Do(func() {
-				// TX VU + VAD
-				ra.txVUMeter.SetLevels(txRMS, txPeakHold)
-				ra.txDBLabel.SetText(fmt.Sprintf("%5.1f dB", txRMS))
-				if rnOn && ra.capturer.IsRunning() {
-					if vad >= 0.5 {
-						ra.txVADLabel.SetText("VAD: 発話中")
-					} else {
-						ra.txVADLabel.SetText("VAD: 待機")
-					}
-				} else if rnOn {
-					ra.txVADLabel.SetText("RNNoise: ON")
-				} else {
-					ra.txVADLabel.SetText("RNNoise: OFF")
+				defer ra.uiRefreshPending.Store(false)
+				if ra.shuttingDown.Load() {
+					return
 				}
 
-				// RX VU
-				ra.rxVUMeter.SetLevels(rxRMS, rxPeakHold)
-				ra.rxDBLabel.SetText(fmt.Sprintf("%5.1f dB", rxRMS))
+				selectedTab := 0
+				if ra.tabs != nil {
+					selectedTab = ra.tabs.SelectedIndex()
+				}
+
+				// TX VU + VAD (only refresh while TX tab is visible)
+				if selectedTab == 0 {
+					ra.txVUMeter.SetLevels(txRMS, txPeakHold)
+					setLabelTextIfChanged(ra.txDBLabel, fmt.Sprintf("%5.1f dB", txRMS))
+					if rnOn && ra.capturer.IsRunning() {
+						if vad >= 0.5 {
+							setLabelTextIfChanged(ra.txVADLabel, "VAD: 発話中")
+						} else {
+							setLabelTextIfChanged(ra.txVADLabel, "VAD: 待機")
+						}
+					} else if rnOn {
+						setLabelTextIfChanged(ra.txVADLabel, "RNNoise: ON")
+					} else {
+						setLabelTextIfChanged(ra.txVADLabel, "RNNoise: OFF")
+					}
+				}
 
 				// Top TX Status Strip
 				vcTag := ""
@@ -579,34 +597,40 @@ func (ra *RelayApp) uiRefreshLoop() {
 					if manualMuted {
 						muteStr = " [MUTE]"
 					}
-					ra.txStripLabel.SetText(fmt.Sprintf("● TX 送信中%s%s%s%s → %s (%s %dk / RTT %.1fms)",
+					setLabelTextIfChanged(ra.txStripLabel, fmt.Sprintf("● TX 送信中%s%s%s%s → %s (%s %dk / RTT %.1fms)",
 						muteStr, pttTag, vcTag, monTag, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
 				} else {
-					ra.txStripLabel.SetText("○ TX 停止中" + pttTag + vcTag + monTag)
+					setLabelTextIfChanged(ra.txStripLabel, "○ TX 停止中"+pttTag+vcTag+monTag)
 				}
 
-				// Top RX Status Strip & Diagnostics
+				// Top RX Status Strip
 				if rxStats.Listening {
 					if rxStats.Active {
-						ra.rxStripLabel.SetText(fmt.Sprintf("● RX 受信中 ← %s (%s / Buf %.1fms)",
+						setLabelTextIfChanged(ra.rxStripLabel, fmt.Sprintf("● RX 受信中 ← %s (%s / Buf %.1fms)",
 							rxStats.RemoteAddr, rxStats.CodecLabel, rxStats.Jitter.BufferedMs))
 					} else {
-						ra.rxStripLabel.SetText(fmt.Sprintf("◎ RX 待受中 (:%d)", rxStats.ListenPort))
+						setLabelTextIfChanged(ra.rxStripLabel, fmt.Sprintf("◎ RX 待受中 (:%d)", rxStats.ListenPort))
 					}
 				} else {
-					ra.rxStripLabel.SetText("○ RX 停止中")
+					setLabelTextIfChanged(ra.rxStripLabel, "○ RX 停止中")
 				}
 
-				src := "--"
-				if rxStats.Active && rxStats.RemoteAddr != "" {
-					src = rxStats.RemoteAddr
+				// RX VU & Diagnostics (only refresh while RX tab is visible)
+				if selectedTab == 1 {
+					ra.rxVUMeter.SetLevels(rxRMS, rxPeakHold)
+					setLabelTextIfChanged(ra.rxDBLabel, fmt.Sprintf("%5.1f dB", rxRMS))
+
+					src := "--"
+					if rxStats.Active && rxStats.RemoteAddr != "" {
+						src = rxStats.RemoteAddr
+					}
+					setLabelTextIfChanged(ra.rxDiagSource, "送信元: "+src)
+					setLabelTextIfChanged(ra.rxDiagCodec, "コーデック: "+rxStats.CodecLabel)
+					setLabelTextIfChanged(ra.rxDiagBuf, fmt.Sprintf("実効バッファ: %.1f ms", rxStats.Jitter.BufferedMs))
+					setLabelTextIfChanged(ra.rxDiagJitter, fmt.Sprintf("ジッター: %.1f ms", rxStats.Jitter.JitterMs))
+					setLabelTextIfChanged(ra.rxDiagLoss, fmt.Sprintf("パケットロス: %.2f %%", rxStats.Jitter.LossPercent))
+					setLabelTextIfChanged(ra.rxDiagDrift, fmt.Sprintf("クロック補正: %+.2f %%", rxStats.Jitter.DriftPercent))
 				}
-				ra.rxDiagSource.SetText("送信元: " + src)
-				ra.rxDiagCodec.SetText("コーデック: " + rxStats.CodecLabel)
-				ra.rxDiagBuf.SetText(fmt.Sprintf("実効バッファ: %.1f ms", rxStats.Jitter.BufferedMs))
-				ra.rxDiagJitter.SetText(fmt.Sprintf("ジッター: %.1f ms", rxStats.Jitter.JitterMs))
-				ra.rxDiagLoss.SetText(fmt.Sprintf("パケットロス: %.2f %%", rxStats.Jitter.LossPercent))
-				ra.rxDiagDrift.SetText(fmt.Sprintf("クロック補正: %+.2f %%", rxStats.Jitter.DriftPercent))
 			})
 		}
 	}

@@ -2,6 +2,7 @@ package uiutil
 
 import (
 	"image/color"
+	"math"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -28,8 +29,24 @@ func NewVUMeter() *VUMeter {
 	return m
 }
 
+func clampDB(db float32) float32 {
+	if db < dsp.MinDB {
+		return dsp.MinDB
+	}
+	if db > 0 {
+		return 0
+	}
+	return db
+}
+
 func (m *VUMeter) SetLevels(rmsDB, peakHoldDB float32) {
+	rmsDB = clampDB(rmsDB)
+	peakHoldDB = clampDB(peakHoldDB)
 	m.mu.Lock()
+	if math.Abs(float64(rmsDB-m.rmsDB)) < 0.2 && math.Abs(float64(peakHoldDB-m.peakHoldDB)) < 0.2 {
+		m.mu.Unlock()
+		return
+	}
 	m.rmsDB = rmsDB
 	m.peakHoldDB = peakHoldDB
 	m.mu.Unlock()
@@ -135,7 +152,6 @@ func (r *vuMeterRenderer) MinSize() fyne.Size {
 
 func (r *vuMeterRenderer) Refresh() {
 	r.updateBars()
-	canvas.Refresh(r.bg)
 	canvas.Refresh(r.bar)
 	canvas.Refresh(r.peak)
 }
