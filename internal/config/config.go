@@ -37,6 +37,7 @@ type TXConfig struct {
 	NoiseSuppression bool               `json:"noise_suppression"`
 	NoiseGateEnabled bool               `json:"noise_gate_enabled"`
 	GateThresholdDB  float64            `json:"gate_threshold_db"`
+	PushToTalk       bool               `json:"push_to_talk"`
 	VoiceChanger     VoiceChangerConfig `json:"voice_changer"`
 	CodecMode        CodecMode          `json:"codec_mode"`
 	TargetHost       string             `json:"target_host"`

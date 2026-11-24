@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
 	"mic-relay/internal/audio"
@@ -82,7 +83,16 @@ type RelayApp struct {
 	txRNNoiseCheck    *widget.Check
 	txGateCheck       *widget.Check
 	txGateLabel       *widget.Label
+	txPTTCheck        *widget.Check
+	txPTTBtn          *uiutil.HoldButton
 	txPeerTable       *widget.Table
+
+	// TX Mute / Push-to-Talk state
+	txMuteMu      sync.Mutex
+	txManualMuted bool
+	pttEnabled    bool
+	pttKeyHeld    bool
+	pttMouseHeld  bool
 	txPeersMu         sync.RWMutex
 	txPeerRows        []peerRow
 	txSelectedRow     int
@@ -147,6 +157,120 @@ func (ra *RelayApp) buildUI() {
 	root := container.NewBorder(statusStrip, nil, nil, nil, ra.tabs)
 	ra.win.SetContent(root)
 	ra.buildMainMenu()
+	ra.setupPTTKeyHandler()
+	ra.setPTTEnabled(ra.cfg.TX.PushToTalk)
+}
+
+func (ra *RelayApp) isTextInputFocused() bool {
+	if ra.win == nil || ra.win.Canvas() == nil {
+		return false
+	}
+	focused := ra.win.Canvas().Focused()
+	if focused == nil {
+		return false
+	}
+	_, isEntry := focused.(*widget.Entry)
+	return isEntry
+}
+
+func (ra *RelayApp) handlePTTKeyDown(ev *fyne.KeyEvent) {
+	if ev == nil || ev.Name != fyne.KeyV {
+		return
+	}
+	if ra.isTextInputFocused() {
+		return
+	}
+	ra.txMuteMu.Lock()
+	enabled := ra.pttEnabled
+	if enabled {
+		ra.pttKeyHeld = true
+	}
+	ra.txMuteMu.Unlock()
+	if enabled {
+		ra.updateTXEffectiveMute()
+	}
+}
+
+func (ra *RelayApp) handlePTTKeyUp(ev *fyne.KeyEvent) {
+	if ev == nil || ev.Name != fyne.KeyV {
+		return
+	}
+	ra.txMuteMu.Lock()
+	wasHeld := ra.pttKeyHeld
+	ra.pttKeyHeld = false
+	ra.txMuteMu.Unlock()
+	if wasHeld {
+		ra.updateTXEffectiveMute()
+	}
+}
+
+func (ra *RelayApp) setupPTTKeyHandler() {
+	if ra.win == nil || ra.win.Canvas() == nil {
+		return
+	}
+	if dc, ok := ra.win.Canvas().(desktop.Canvas); ok {
+		dc.SetOnKeyDown(ra.handlePTTKeyDown)
+		dc.SetOnKeyUp(ra.handlePTTKeyUp)
+	}
+}
+
+func (ra *RelayApp) setPTTEnabled(on bool) {
+	ra.txMuteMu.Lock()
+	ra.pttEnabled = on
+	if !on {
+		ra.pttKeyHeld = false
+		ra.pttMouseHeld = false
+	}
+	ra.txMuteMu.Unlock()
+
+	ra.cfgMu.Lock()
+	ra.cfg.TX.PushToTalk = on
+	ra.cfgMu.Unlock()
+
+	ra.updateTXEffectiveMute()
+}
+
+func (ra *RelayApp) setPTTMouseHeld(held bool) {
+	ra.txMuteMu.Lock()
+	if !ra.pttEnabled {
+		ra.pttMouseHeld = false
+		ra.txMuteMu.Unlock()
+		return
+	}
+	ra.pttMouseHeld = held
+	ra.txMuteMu.Unlock()
+	ra.updateTXEffectiveMute()
+}
+
+func (ra *RelayApp) updateTXEffectiveMute() {
+	ra.txMuteMu.Lock()
+	manualMuted := ra.txManualMuted
+	pttOn := ra.pttEnabled
+	talking := ra.pttKeyHeld || ra.pttMouseHeld
+	ra.txMuteMu.Unlock()
+
+	effectiveMute := manualMuted || (pttOn && !talking)
+	ra.txDSP.SetMuted(effectiveMute)
+
+	if ra.txPTTBtn != nil && !ra.shuttingDown.Load() {
+		fyne.Do(func() {
+			if !pttOn {
+				ra.txPTTBtn.Disable()
+				ra.txPTTBtn.SetText("押している間話す (V)")
+				ra.txPTTBtn.Importance = widget.MediumImportance
+			} else if talking {
+				ra.txPTTBtn.Enable()
+				ra.txPTTBtn.SetText("発話中... (離すとミュート)")
+				ra.txPTTBtn.Importance = widget.SuccessImportance
+			} else {
+				ra.txPTTBtn.Enable()
+				ra.txPTTBtn.SetText("押している間話す (V)")
+				ra.txPTTBtn.Importance = widget.MediumImportance
+			}
+			ra.txPTTBtn.Refresh()
+		})
+	}
+	ra.syncTrayState()
 }
 
 func (ra *RelayApp) buildMainMenu() {
@@ -295,6 +419,12 @@ func (ra *RelayApp) setupTrayAndClose() {
 		ra.cfgMu.Unlock()
 
 		if minToTray && ra.tray != nil {
+			// Release any held PTT key/mouse before hiding window
+			ra.txMuteMu.Lock()
+			ra.pttKeyHeld = false
+			ra.pttMouseHeld = false
+			ra.txMuteMu.Unlock()
+			ra.updateTXEffectiveMute()
 			ra.win.Hide()
 			return
 		}
@@ -407,15 +537,28 @@ func (ra *RelayApp) uiRefreshLoop() {
 				if ra.monitorEnabled.Load() {
 					monTag = " [試聴]"
 				}
+				ra.txMuteMu.Lock()
+				pttOn := ra.pttEnabled
+				pttTalk := ra.pttKeyHeld || ra.pttMouseHeld
+				manualMuted := ra.txManualMuted
+				ra.txMuteMu.Unlock()
+				pttTag := ""
+				if pttOn {
+					if pttTalk {
+						pttTag = " [PTT発話]"
+					} else {
+						pttTag = " [PTT待機]"
+					}
+				}
 				if txStats.Connected {
 					muteStr := ""
-					if ra.txDSP.IsMuted() {
+					if manualMuted {
 						muteStr = " [MUTE]"
 					}
-					ra.txStripLabel.SetText(fmt.Sprintf("● TX 送信中%s%s%s → %s (%s %dk / RTT %.1fms)",
-						muteStr, vcTag, monTag, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
+					ra.txStripLabel.SetText(fmt.Sprintf("● TX 送信中%s%s%s%s → %s (%s %dk / RTT %.1fms)",
+						muteStr, pttTag, vcTag, monTag, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
 				} else {
-					ra.txStripLabel.SetText("○ TX 停止中" + vcTag + monTag)
+					ra.txStripLabel.SetText("○ TX 停止中" + pttTag + vcTag + monTag)
 				}
 
 				// Top RX Status Strip & Diagnostics

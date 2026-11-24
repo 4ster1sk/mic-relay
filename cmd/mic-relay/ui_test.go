@@ -104,6 +104,41 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 		t.Fatalf("expected minimize-to-tray menu item checked")
 	}
 
+	// Verify Push-to-Talk: V key works when no Entry is focused, ignored when Entry is focused
+	ra.setPTTEnabled(true)
+	if !ra.txDSP.IsMuted() {
+		t.Fatalf("expected TX muted when PTT enabled and idle")
+	}
+	// Focus host Entry -> V key must NOT unmute
+	w.Canvas().Focus(ra.txHostEntry)
+	ra.handlePTTKeyDown(&fyne.KeyEvent{Name: fyne.KeyV})
+	if !ra.txDSP.IsMuted() {
+		t.Fatalf("expected V key ignored while text Entry is focused")
+	}
+	// Unfocus Entry -> V key MUST unmute on KeyDown and re-mute on KeyUp
+	w.Canvas().Unfocus()
+	ra.handlePTTKeyDown(&fyne.KeyEvent{Name: fyne.KeyV})
+	if ra.txDSP.IsMuted() {
+		t.Fatalf("expected V key to unmute TX when Entry is not focused")
+	}
+	ra.handlePTTKeyUp(&fyne.KeyEvent{Name: fyne.KeyV})
+	if !ra.txDSP.IsMuted() {
+		t.Fatalf("expected V key release to re-mute TX")
+	}
+	// Mouse hold button works too
+	ra.setPTTMouseHeld(true)
+	if ra.txDSP.IsMuted() {
+		t.Fatalf("expected PTT mouse hold to unmute TX")
+	}
+	ra.setPTTMouseHeld(false)
+	if !ra.txDSP.IsMuted() {
+		t.Fatalf("expected PTT mouse release to re-mute TX")
+	}
+	ra.setPTTEnabled(false)
+	if ra.txDSP.IsMuted() {
+		t.Fatalf("expected TX unmuted when PTT disabled")
+	}
+
 	// Render at default 700x680
 	w.Resize(fyne.NewSize(700, 680))
 

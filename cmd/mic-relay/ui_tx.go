@@ -139,6 +139,18 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	})
 	ra.txGateCheck.Checked = ra.cfg.TX.NoiseGateEnabled
 
+	ra.txPTTCheck = widget.NewCheck("プッシュトーク (V)", func(on bool) {
+		ra.setPTTEnabled(on)
+		ra.saveConfig()
+	})
+	ra.txPTTCheck.Checked = ra.cfg.TX.PushToTalk
+
+	ra.txPTTBtn = uiutil.NewHoldButton(
+		"押している間話す (V)",
+		func() { ra.setPTTMouseHeld(true) },
+		func() { ra.setPTTMouseHeld(false) },
+	)
+
 	micCard := widget.NewCard("1. 入力マイク・音声処理", "", container.NewVBox(
 		container.NewBorder(nil, nil, widget.NewLabel("入力マイク"), refreshMicBtn, ra.txMicSelect),
 		ra.txLoopWarnLabel,
@@ -148,6 +160,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 			ra.txRNNoiseCheck,
 			container.NewBorder(nil, nil, ra.txGateCheck, ra.txGateLabel, gateSlider),
 		),
+		container.NewBorder(nil, nil, ra.txPTTCheck, nil, ra.txPTTBtn),
 	))
 
 	// ---- Section 2: Destination Peer Aligned Table ----
@@ -446,9 +459,10 @@ func (ra *RelayApp) deleteSelectedPreset() {
 }
 
 func (ra *RelayApp) toggleTXMute() {
-	next := !ra.txDSP.IsMuted()
-	ra.txDSP.SetMuted(next)
-	ra.syncTrayState()
+	ra.txMuteMu.Lock()
+	ra.txManualMuted = !ra.txManualMuted
+	ra.txMuteMu.Unlock()
+	ra.updateTXEffectiveMute()
 }
 
 func (ra *RelayApp) selectedInputDeviceName() string {
