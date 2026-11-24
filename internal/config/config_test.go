@@ -25,6 +25,20 @@ func TestConfigSaveAndLoad(t *testing.T) {
 	cfg.TX.VoiceChanger.HighPassEnabled = true
 	cfg.TX.VoiceChanger.HighPassHz = 205.0
 	cfg.TX.VoiceChanger.DeEsser = 0.50
+	cfg.TX.VoiceChanger.Presets = []VoiceChangerPreset{
+		{
+			Name:            "マイ女声",
+			PitchSemitones:  9.5,
+			FormantRatio:    1.22,
+			ThroatFormant:   1.08,
+			BrightFormant:   1.10,
+			Breathiness:     0.28,
+			Softness:        0.60,
+			HighPassEnabled: true,
+			HighPassHz:      140.0,
+			DeEsser:         0.40,
+		},
+	}
 	cfg.RX.TargetBufferMs = 50
 	cfg.MinimizeToTray = true
 
@@ -42,6 +56,9 @@ func TestConfigSaveAndLoad(t *testing.T) {
 	if !vc.Enabled || vc.PitchSemitones != 11.5 || vc.ThroatFormant != 1.12 || vc.BrightFormant != 1.15 ||
 		vc.Breathiness != 0.38 || vc.HighPassHz != 205.0 || vc.DeEsser != 0.50 {
 		t.Fatalf("loaded voice changer config mismatch: %+v", vc)
+	}
+	if len(vc.Presets) != 1 || vc.Presets[0].Name != "マイ女声" || vc.Presets[0].PitchSemitones != 9.5 || vc.Presets[0].HighPassHz != 140.0 {
+		t.Fatalf("loaded custom voice changer presets mismatch: %+v", vc.Presets)
 	}
 }
 

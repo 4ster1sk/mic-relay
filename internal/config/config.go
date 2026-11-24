@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"mic-relay/internal/protocol"
 )
@@ -23,8 +24,8 @@ type PeerPreset struct {
 	Port int    `json:"port"`
 }
 
-type VoiceChangerConfig struct {
-	Enabled         bool    `json:"enabled"`
+type VoiceChangerPreset struct {
+	Name            string  `json:"name"`
 	PitchSemitones  float64 `json:"pitch_semitones"`
 	FormantRatio    float64 `json:"formant_ratio"`
 	ThroatFormant   float64 `json:"throat_formant"`
@@ -34,6 +35,20 @@ type VoiceChangerConfig struct {
 	HighPassEnabled bool    `json:"high_pass_enabled"`
 	HighPassHz      float64 `json:"high_pass_hz"`
 	DeEsser         float64 `json:"de_esser"`
+}
+
+type VoiceChangerConfig struct {
+	Enabled         bool                 `json:"enabled"`
+	PitchSemitones  float64              `json:"pitch_semitones"`
+	FormantRatio    float64              `json:"formant_ratio"`
+	ThroatFormant   float64              `json:"throat_formant"`
+	BrightFormant   float64              `json:"bright_formant"`
+	Breathiness     float64              `json:"breathiness"`
+	Softness        float64              `json:"softness"`
+	HighPassEnabled bool                 `json:"high_pass_enabled"`
+	HighPassHz      float64              `json:"high_pass_hz"`
+	DeEsser         float64              `json:"de_esser"`
+	Presets         []VoiceChangerPreset `json:"presets,omitempty"`
 }
 
 type TXConfig struct {
@@ -92,6 +107,7 @@ func Default() Config {
 				HighPassEnabled: true,
 				HighPassHz:      110.0,
 				DeEsser:         0.35,
+				Presets:         []VoiceChangerPreset{},
 			},
 			CodecMode:  CodecModePCM,
 			TargetPort: protocol.DefaultAudioPort,
@@ -164,6 +180,41 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.TX.VoiceChanger.DeEsser < 0 || cfg.TX.VoiceChanger.DeEsser > 1 {
 		cfg.TX.VoiceChanger.DeEsser = 0.35
+	}
+	if len(cfg.TX.VoiceChanger.Presets) > 0 {
+		cleaned := make([]VoiceChangerPreset, 0, len(cfg.TX.VoiceChanger.Presets))
+		for _, p := range cfg.TX.VoiceChanger.Presets {
+			p.Name = strings.TrimSpace(p.Name)
+			if p.Name == "" {
+				continue
+			}
+			if p.PitchSemitones < -12 || p.PitchSemitones > 16 {
+				p.PitchSemitones = 7.5
+			}
+			if p.FormantRatio < 0.75 || p.FormantRatio > 1.45 {
+				p.FormantRatio = 1.18
+			}
+			if p.ThroatFormant < 0.80 || p.ThroatFormant > 1.30 {
+				p.ThroatFormant = 1.06
+			}
+			if p.BrightFormant < 0.80 || p.BrightFormant > 1.30 {
+				p.BrightFormant = 1.06
+			}
+			if p.Breathiness < 0 || p.Breathiness > 1 {
+				p.Breathiness = 0.22
+			}
+			if p.Softness < 0 || p.Softness > 1 {
+				p.Softness = 0.55
+			}
+			if p.HighPassHz < 80 || p.HighPassHz > 280 {
+				p.HighPassHz = 110.0
+			}
+			if p.DeEsser < 0 || p.DeEsser > 1 {
+				p.DeEsser = 0.35
+			}
+			cleaned = append(cleaned, p)
+		}
+		cfg.TX.VoiceChanger.Presets = cleaned
 	}
 	return cfg, nil
 }

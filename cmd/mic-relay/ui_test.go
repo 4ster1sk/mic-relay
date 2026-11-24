@@ -105,6 +105,59 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if vcUI := ra.buildVoiceChangerContent(); vcUI == nil {
 		t.Fatalf("expected non-nil voice changer dialog content")
 	}
+
+	// Verify custom Voice Changer preset save, overwrite, menu sync, persistence, and delete
+	if _, err := ra.saveVoiceChangerPreset("   ", dsp.PresetFemaleNatural.VoiceChangerParams); err == nil {
+		t.Fatalf("expected empty custom preset name to fail")
+	}
+	customParams := dsp.VoiceChangerParams{
+		PitchSemitones:  9.0,
+		FormantRatio:    1.21,
+		ThroatFormant:   1.07,
+		BrightFormant:   1.09,
+		Breathiness:     0.25,
+		Softness:        0.58,
+		HighPassEnabled: true,
+		HighPassHz:      135.0,
+		DeEsser:         0.42,
+	}
+	overwritten, err := ra.saveVoiceChangerPreset("配信用ボイス", customParams)
+	if err != nil || overwritten {
+		t.Fatalf("saveVoiceChangerPreset new failed: overwritten=%v err=%v", overwritten, err)
+	}
+	customParams.PitchSemitones = 10.5
+	overwritten, err = ra.saveVoiceChangerPreset("配信用ボイス", customParams)
+	if err != nil || !overwritten {
+		t.Fatalf("saveVoiceChangerPreset overwrite failed: overwritten=%v err=%v", overwritten, err)
+	}
+	savedPresets := ra.customVoiceChangerPresets()
+	if len(savedPresets) != 1 || savedPresets[0].Name != "配信用ボイス" || savedPresets[0].PitchSemitones != 10.5 {
+		t.Fatalf("unexpected custom presets after overwrite: %+v", savedPresets)
+	}
+	foundInMenu := false
+	for _, it := range ra.vcMenu.Items {
+		if it.Label == "カスタム: 配信用ボイス" {
+			foundInMenu = true
+			break
+		}
+	}
+	if !foundInMenu {
+		t.Fatalf("expected custom preset to appear in ボイチェン menu")
+	}
+	if vcUI := ra.buildVoiceChangerContent(); vcUI == nil {
+		t.Fatalf("expected non-nil voice changer dialog content with custom presets")
+	}
+	if !ra.deleteVoiceChangerPreset("配信用ボイス") {
+		t.Fatalf("expected deleteVoiceChangerPreset to return true")
+	}
+	if len(ra.customVoiceChangerPresets()) != 0 {
+		t.Fatalf("expected custom presets empty after delete")
+	}
+	for _, it := range ra.vcMenu.Items {
+		if it.Label == "カスタム: 配信用ボイス" {
+			t.Fatalf("expected deleted custom preset removed from ボイチェン menu")
+		}
+	}
 	ra.setVoiceChangerEnabled(false)
 	if ra.menuVCEnable.Checked || ra.voiceChanger.IsEnabled() {
 		t.Fatalf("expected voice changer disabled")

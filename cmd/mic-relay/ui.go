@@ -63,6 +63,7 @@ type RelayApp struct {
 
 	// Top main menu bar
 	mainMenu          *fyne.MainMenu
+	vcMenu            *fyne.Menu
 	menuCodecPCM      *fyne.MenuItem
 	menuCodecOpus96   *fyne.MenuItem
 	menuCodecOpus48   *fyne.MenuItem
@@ -356,42 +357,13 @@ func (ra *RelayApp) buildMainMenu() {
 		next := !(ra.voiceChanger != nil && ra.voiceChanger.IsEnabled())
 		ra.setVoiceChangerEnabled(next)
 	})
-	itemVCFemaleNat := fyne.NewMenuItem("プリセット: 女声（ナチュラル）", func() {
-		ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
-	})
-	itemVCFemaleHigh := fyne.NewMenuItem("プリセット: 女声（高め・カワボ）", func() {
-		ra.applyVoiceChangerPreset(dsp.PresetFemaleHigh, true)
-	})
-	itemVCFemaleWhisper := fyne.NewMenuItem("プリセット: 女声（お姉さん・ウィスパー）", func() {
-		ra.applyVoiceChangerPreset(dsp.PresetFemaleWhisper, true)
-	})
-	itemVCAndro := fyne.NewMenuItem("プリセット: 中性・少年声", func() {
-		ra.applyVoiceChangerPreset(dsp.PresetAndrogynous, true)
-	})
-	itemVCMax := fyne.NewMenuItem("プリセット: 全パラメータ最大 (MAX)", func() {
-		ra.applyVoiceChangerPreset(dsp.PresetMax, true)
-	})
 	ra.menuVCLocalMon = fyne.NewMenuItem("ローカル試聴 (スピーカーで確認)", func() {
 		next := !ra.monitorEnabled.Load()
 		if err := ra.setLocalMonitorEnabled(next); err != nil {
 			ra.showError("ローカル試聴エラー", err)
 		}
 	})
-	itemVCDetail := fyne.NewMenuItem("詳細調整・ローカル試聴...", func() {
-		ra.showVoiceChangerDialog()
-	})
-	vcMenu := fyne.NewMenu("ボイチェン",
-		ra.menuVCEnable,
-		fyne.NewMenuItemSeparator(),
-		itemVCFemaleNat,
-		itemVCFemaleHigh,
-		itemVCFemaleWhisper,
-		itemVCAndro,
-		itemVCMax,
-		fyne.NewMenuItemSeparator(),
-		ra.menuVCLocalMon,
-		itemVCDetail,
-	)
+	ra.vcMenu = fyne.NewMenu("ボイチェン", ra.buildVCMenuItems()...)
 
 	ra.menuMinToTray = fyne.NewMenuItem("閉じるでトレイに最小化", func() {
 		ra.cfgMu.Lock()
@@ -410,9 +382,59 @@ func (ra *RelayApp) buildMainMenu() {
 		itemQuit,
 	)
 
-	ra.mainMenu = fyne.NewMainMenu(qualityMenu, vcMenu, settingsMenu)
+	ra.mainMenu = fyne.NewMainMenu(qualityMenu, ra.vcMenu, settingsMenu)
 	ra.syncMenuState()
 	ra.win.SetMainMenu(ra.mainMenu)
+}
+
+func (ra *RelayApp) buildVCMenuItems() []*fyne.MenuItem {
+	items := []*fyne.MenuItem{
+		ra.menuVCEnable,
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("プリセット: 女声（ナチュラル）", func() {
+			ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
+		}),
+		fyne.NewMenuItem("プリセット: 女声（高め・カワボ）", func() {
+			ra.applyVoiceChangerPreset(dsp.PresetFemaleHigh, true)
+		}),
+		fyne.NewMenuItem("プリセット: 女声（お姉さん・ウィスパー）", func() {
+			ra.applyVoiceChangerPreset(dsp.PresetFemaleWhisper, true)
+		}),
+		fyne.NewMenuItem("プリセット: 中性・少年声", func() {
+			ra.applyVoiceChangerPreset(dsp.PresetAndrogynous, true)
+		}),
+		fyne.NewMenuItem("プリセット: 全パラメータ最大 (MAX)", func() {
+			ra.applyVoiceChangerPreset(dsp.PresetMax, true)
+		}),
+	}
+
+	customs := ra.customVoiceChangerPresets()
+	if len(customs) > 0 {
+		items = append(items, fyne.NewMenuItemSeparator())
+		for _, p := range customs {
+			preset := configPresetToDSP(p)
+			items = append(items, fyne.NewMenuItem("カスタム: "+p.Name, func() {
+				ra.applyVoiceChangerPreset(preset, true)
+			}))
+		}
+	}
+
+	items = append(items,
+		fyne.NewMenuItemSeparator(),
+		ra.menuVCLocalMon,
+		fyne.NewMenuItem("詳細調整・ローカル試聴...", func() {
+			ra.showVoiceChangerDialog()
+		}),
+	)
+	return items
+}
+
+func (ra *RelayApp) rebuildVCMenu() {
+	if ra.vcMenu == nil || ra.mainMenu == nil {
+		return
+	}
+	ra.vcMenu.Items = ra.buildVCMenuItems()
+	ra.mainMenu.Refresh()
 }
 
 func (ra *RelayApp) selectCodecMode(mode config.CodecMode) {

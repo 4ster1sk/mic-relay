@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -10,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
+	"mic-relay/internal/config"
 	"mic-relay/internal/dsp"
 	"mic-relay/internal/uiutil"
 )
@@ -71,6 +73,92 @@ func (ra *RelayApp) setVoiceChangerEnabled(on bool) {
 	ra.syncMenuState()
 	ra.syncTrayState()
 	ra.saveConfig()
+}
+
+func configPresetToDSP(p config.VoiceChangerPreset) dsp.VoiceChangerPreset {
+	return dsp.VoiceChangerPreset{
+		Name: p.Name,
+		VoiceChangerParams: dsp.VoiceChangerParams{
+			PitchSemitones:  p.PitchSemitones,
+			FormantRatio:    p.FormantRatio,
+			ThroatFormant:   p.ThroatFormant,
+			BrightFormant:   p.BrightFormant,
+			Breathiness:     p.Breathiness,
+			Softness:        p.Softness,
+			HighPassEnabled: p.HighPassEnabled,
+			HighPassHz:      p.HighPassHz,
+			DeEsser:         p.DeEsser,
+		}.Clamp(),
+	}
+}
+
+func (ra *RelayApp) customVoiceChangerPresets() []config.VoiceChangerPreset {
+	ra.cfgMu.Lock()
+	defer ra.cfgMu.Unlock()
+	if len(ra.cfg.TX.VoiceChanger.Presets) == 0 {
+		return nil
+	}
+	out := make([]config.VoiceChangerPreset, len(ra.cfg.TX.VoiceChanger.Presets))
+	copy(out, ra.cfg.TX.VoiceChanger.Presets)
+	return out
+}
+
+func (ra *RelayApp) saveVoiceChangerPreset(name string, params dsp.VoiceChangerParams) (bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, fmt.Errorf("プリセット名を入力してください")
+	}
+	clamped := params.Clamp()
+	entry := config.VoiceChangerPreset{
+		Name:            name,
+		PitchSemitones:  clamped.PitchSemitones,
+		FormantRatio:    clamped.FormantRatio,
+		ThroatFormant:   clamped.ThroatFormant,
+		BrightFormant:   clamped.BrightFormant,
+		Breathiness:     clamped.Breathiness,
+		Softness:        clamped.Softness,
+		HighPassEnabled: clamped.HighPassEnabled,
+		HighPassHz:      clamped.HighPassHz,
+		DeEsser:         clamped.DeEsser,
+	}
+
+	overwritten := false
+	ra.cfgMu.Lock()
+	for i := range ra.cfg.TX.VoiceChanger.Presets {
+		if ra.cfg.TX.VoiceChanger.Presets[i].Name == name {
+			ra.cfg.TX.VoiceChanger.Presets[i] = entry
+			overwritten = true
+			break
+		}
+	}
+	if !overwritten {
+		ra.cfg.TX.VoiceChanger.Presets = append(ra.cfg.TX.VoiceChanger.Presets, entry)
+	}
+	ra.cfgMu.Unlock()
+
+	ra.saveConfig()
+	ra.rebuildVCMenu()
+	return overwritten, nil
+}
+
+func (ra *RelayApp) deleteVoiceChangerPreset(name string) bool {
+	removed := false
+	ra.cfgMu.Lock()
+	presets := ra.cfg.TX.VoiceChanger.Presets
+	for i := range presets {
+		if presets[i].Name == name {
+			ra.cfg.TX.VoiceChanger.Presets = append(presets[:i], presets[i+1:]...)
+			removed = true
+			break
+		}
+	}
+	ra.cfgMu.Unlock()
+
+	if removed {
+		ra.saveConfig()
+		ra.rebuildVCMenu()
+	}
+	return removed
 }
 
 func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable bool) {
@@ -201,11 +289,8 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 	}
 
 	suppressCallbacks := false
-	updateParams := func() {
-		if suppressCallbacks {
-			return
-		}
-		params := dsp.VoiceChangerParams{
+	currentParams := func() dsp.VoiceChangerParams {
+		return dsp.VoiceChangerParams{
 			PitchSemitones:  math.Round(pitchSlider.Value*2) / 2,
 			FormantRatio:    math.Round(formantSlider.Value*100) / 100,
 			ThroatFormant:   1.0 + math.Round(throatSlider.Value)/100.0,
@@ -216,6 +301,12 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 			HighPassHz:      math.Round(hpHzSlider.Value/5) * 5,
 			DeEsser:         math.Round(deEssSlider.Value) / 100.0,
 		}.Clamp()
+	}
+	updateParams := func() {
+		if suppressCallbacks {
+			return
+		}
+		params := currentParams()
 
 		pitchVal.SetText(fmt.Sprintf("%+.1f 半音", params.PitchSemitones))
 		formantVal.SetText(fmt.Sprintf("%.2fx", params.FormantRatio))
@@ -289,6 +380,60 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		widget.NewButton("全パラメータ最大 (MAX)", func() { applyPresetUI(dsp.PresetMax) }),
 	)
 
+	presetNameEntry := widget.NewEntry()
+	presetNameEntry.SetPlaceHolder("新しいプリセット名を入力...")
+	presetStatusLabel := widget.NewLabel("")
+	presetStatusLabel.Truncation = fyne.TextTruncateEllipsis
+	customPresetsBox := container.NewVBox()
+
+	var refreshCustomPresetsUI func()
+	refreshCustomPresetsUI = func() {
+		customs := ra.customVoiceChangerPresets()
+		objs := make([]fyne.CanvasObject, 0, len(customs)+1)
+		if len(customs) == 0 {
+			emptyLbl := widget.NewLabel("保存済みのカスタムプリセットはありません")
+			objs = append(objs, emptyLbl)
+		} else {
+			for _, p := range customs {
+				presetCfg := p
+				applyBtn := widget.NewButton(presetCfg.Name, func() {
+					applyPresetUI(configPresetToDSP(presetCfg))
+					presetNameEntry.SetText(presetCfg.Name)
+					presetStatusLabel.SetText(fmt.Sprintf("プリセット「%s」を適用しました", presetCfg.Name))
+				})
+				delBtn := widget.NewButton("削除", func() {
+					if ra.deleteVoiceChangerPreset(presetCfg.Name) {
+						presetStatusLabel.SetText(fmt.Sprintf("プリセット「%s」を削除しました", presetCfg.Name))
+						refreshCustomPresetsUI()
+					}
+				})
+				objs = append(objs, container.NewBorder(nil, nil, nil, delBtn, applyBtn))
+			}
+		}
+		customPresetsBox.Objects = objs
+		customPresetsBox.Refresh()
+	}
+	refreshCustomPresetsUI()
+
+	doSavePreset := func() {
+		name := strings.TrimSpace(presetNameEntry.Text)
+		overwritten, err := ra.saveVoiceChangerPreset(name, currentParams())
+		if err != nil {
+			presetStatusLabel.SetText(err.Error())
+			return
+		}
+		if overwritten {
+			presetStatusLabel.SetText(fmt.Sprintf("プリセット「%s」を上書き保存しました", name))
+		} else {
+			presetStatusLabel.SetText(fmt.Sprintf("プリセット「%s」を保存しました", name))
+		}
+		refreshCustomPresetsUI()
+	}
+	presetNameEntry.OnSubmitted = func(_ string) { doSavePreset() }
+	savePresetBtn := widget.NewButton("現在の設定を保存", doSavePreset)
+
+	customPresetRow := container.NewBorder(nil, nil, nil, savePresetBtn, presetNameEntry)
+
 	var monitorCheck *widget.Check
 	monitorCheck = widget.NewCheck("ローカル試聴 (自分のスピーカー/ヘッドホンで確認)", func(on bool) {
 		if err := ra.setLocalMonitorEnabled(on); err != nil {
@@ -311,6 +456,11 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 	body := container.NewVBox(
 		enableCheck,
 		presetsGrid,
+		widget.NewSeparator(),
+		vcSectionHeader("カスタムプリセット"),
+		customPresetRow,
+		presetStatusLabel,
+		customPresetsBox,
 		widget.NewSeparator(),
 		vcSectionHeader("基本調整（音程・声道長）"),
 		vcSliderRow("ピッチ (音程)", pitchVal, pitchSlider),
