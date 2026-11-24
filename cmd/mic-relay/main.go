@@ -56,6 +56,7 @@ func main() {
 	voiceChanger.SetParams(
 		cfg.TX.VoiceChanger.PitchSemitones,
 		cfg.TX.VoiceChanger.FormantRatio,
+		cfg.TX.VoiceChanger.Softness,
 		cfg.TX.VoiceChanger.HighPassEnabled,
 	)
 	voiceChanger.SetEnabled(cfg.TX.VoiceChanger.Enabled)

@@ -7,43 +7,53 @@ import (
 )
 
 const (
-	vcFFTSize   = 1024
-	vcHopSize   = 240 // 5ms @ 48kHz (exact divisor of 480-sample 10ms frame)
-	vcHalfBins  = vcFFTSize/2 + 1
-	vcCepOrder  = 38 // cepstral liftering order for smooth vocal tract envelope @ 48kHz
-	vcCepTaper  = 6
+	vcFFTSize  = 2048
+	vcHopSize  = 240 // 5ms @ 48kHz (exact divisor of 480-sample 10ms frame; ~88% overlap)
+	vcHalfBins = vcFFTSize/2 + 1
+	vcCepOrder = 52 // cepstral liftering order for 2048-pt FFT @ 48kHz (~1.1ms quefrency)
+	vcCepTaper = 10
+	vcTEIters  = 4 // True Envelope iterations
 )
 
 type VoiceChangerPreset struct {
 	Name            string
 	PitchSemitones  float64
 	FormantRatio    float64
+	Softness        float64
 	HighPassEnabled bool
 }
 
 var (
 	PresetFemaleNatural = VoiceChangerPreset{
 		Name:            "女声（ナチュラル）",
-		PitchSemitones:  5.0,
-		FormantRatio:    1.18,
+		PitchSemitones:  4.5,
+		FormantRatio:    1.16,
+		Softness:        0.45,
 		HighPassEnabled: true,
 	}
 	PresetFemaleHigh = VoiceChangerPreset{
 		Name:            "女声（高め・アニメ調）",
-		PitchSemitones:  8.0,
-		FormantRatio:    1.28,
+		PitchSemitones:  7.0,
+		FormantRatio:    1.24,
+		Softness:        0.55,
 		HighPassEnabled: true,
 	}
 	PresetAndrogynous = VoiceChangerPreset{
 		Name:            "中性・少年声",
-		PitchSemitones:  3.0,
-		FormantRatio:    1.10,
+		PitchSemitones:  2.5,
+		FormantRatio:    1.08,
+		Softness:        0.25,
 		HighPassEnabled: false,
 	}
 )
 
-// VoiceChanger performs real-time Pure-Go pitch + independent formant shifting
-// using a phase-vocoder STFT with cepstral spectral envelope warping.
+// VoiceChanger performs real-time Pure-Go female voice conversion (DSP v2) using:
+//   - 2048-pt STFT (23.4Hz bin resolution @ 48kHz)
+//   - Identity Phase Locking (Laroche & Dolson) to eliminate robotic phasiness
+//   - True Envelope (iterated cepstral upper-hull) for crisp vowel formants
+//   - Non-linear formant warping (protects >5kHz sibilants from harshness)
+//   - Voiced/Unvoiced (V/UV) blending to preserve crisp consonants
+//   - Chest-resonance HPF + softness spectral shaping
 type VoiceChanger struct {
 	mu             sync.Mutex
 	sampleRate     float64
@@ -51,31 +61,38 @@ type VoiceChanger struct {
 	wasEnabled     bool
 	pitchSemitones float64
 	formantRatio   float64
+	softness       float64
 	hpEnabled      bool
 
-	fft      *FFT
-	window   []float64
-	olaNorm  []float64 // periodic overlap-add normalization (length vcHopSize)
+	fft     *FFT
+	window  []float64
+	olaNorm []float64 // periodic overlap-add normalization (length vcHopSize)
 
-	inRing   []float64 // length vcFFTSize
-	outOLA   []float64 // length vcFFTSize
-	hopIn    []float64 // accumulates up to vcHopSize
-	hopOut   []float64 // ready output samples
+	inRing []float64 // length vcFFTSize
+	outOLA []float64 // length vcFFTSize
+	hopIn  []float64
+	hopOut []float64
 
-	// Preallocated FFT & vocoder scratch buffers (zero allocations in Process)
+	// Preallocated scratch buffers (zero allocations in Process)
 	re         []float64
 	im         []float64
 	cepRe      []float64
 	cepIm      []float64
+	logMag     []float64
+	envLog     []float64
 	mag        []float64
+	anaPhase   []float64
 	env        []float64
 	prevPhase  []float64
 	synPhase   []float64
 	synMag     []float64
-	synFreq    []float64
+	synOutRe   []float64
+	synOutIm   []float64
+	peaks      []int
+	voicedEWMA float64
 	dryCopy    []float32
 
-	// 2nd-order Butterworth HPF @ 130Hz state
+	// 2nd-order Butterworth HPF @ 145Hz state
 	hpB0, hpB1, hpB2 float64
 	hpA1, hpA2       float64
 	hpX1, hpX2       float64
@@ -90,6 +107,7 @@ func NewVoiceChanger(sampleRate int) *VoiceChanger {
 		sampleRate:     float64(sampleRate),
 		pitchSemitones: PresetFemaleNatural.PitchSemitones,
 		formantRatio:   PresetFemaleNatural.FormantRatio,
+		softness:       PresetFemaleNatural.Softness,
 		hpEnabled:      PresetFemaleNatural.HighPassEnabled,
 		fft:            NewFFT(vcFFTSize),
 		window:         make([]float64, vcFFTSize),
@@ -102,12 +120,18 @@ func NewVoiceChanger(sampleRate int) *VoiceChanger {
 		im:             make([]float64, vcFFTSize),
 		cepRe:          make([]float64, vcFFTSize),
 		cepIm:          make([]float64, vcFFTSize),
+		logMag:         make([]float64, vcHalfBins),
+		envLog:         make([]float64, vcHalfBins),
 		mag:            make([]float64, vcHalfBins),
+		anaPhase:       make([]float64, vcHalfBins),
 		env:            make([]float64, vcHalfBins),
 		prevPhase:      make([]float64, vcHalfBins),
 		synPhase:       make([]float64, vcHalfBins),
 		synMag:         make([]float64, vcHalfBins),
-		synFreq:        make([]float64, vcHalfBins),
+		synOutRe:       make([]float64, vcHalfBins),
+		synOutIm:       make([]float64, vcHalfBins),
+		peaks:          make([]int, 0, 256),
+		voicedEWMA:     1.0,
 		dryCopy:        make([]float32, 0, 960),
 	}
 
@@ -128,7 +152,7 @@ func NewVoiceChanger(sampleRate int) *VoiceChanger {
 		vc.olaNorm[pos] = 1.0 / sum
 	}
 
-	vc.initHighPass(130.0)
+	vc.initHighPass(145.0)
 	return vc
 }
 
@@ -160,7 +184,7 @@ func (vc *VoiceChanger) IsEnabled() bool {
 	return vc.enabled.Load()
 }
 
-func (vc *VoiceChanger) SetParams(pitchSemitones, formantRatio float64, hpEnabled bool) {
+func (vc *VoiceChanger) SetParams(pitchSemitones, formantRatio, softness float64, hpEnabled bool) {
 	if pitchSemitones < -12 {
 		pitchSemitones = -12
 	}
@@ -173,17 +197,24 @@ func (vc *VoiceChanger) SetParams(pitchSemitones, formantRatio float64, hpEnable
 	if formantRatio > 1.45 {
 		formantRatio = 1.45
 	}
+	if softness < 0 {
+		softness = 0
+	}
+	if softness > 1 {
+		softness = 1
+	}
 	vc.mu.Lock()
 	vc.pitchSemitones = pitchSemitones
 	vc.formantRatio = formantRatio
+	vc.softness = softness
 	vc.hpEnabled = hpEnabled
 	vc.mu.Unlock()
 }
 
-func (vc *VoiceChanger) Params() (pitchSemitones, formantRatio float64, hpEnabled bool) {
+func (vc *VoiceChanger) Params() (pitchSemitones, formantRatio, softness float64, hpEnabled bool) {
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
-	return vc.pitchSemitones, vc.formantRatio, vc.hpEnabled
+	return vc.pitchSemitones, vc.formantRatio, vc.softness, vc.hpEnabled
 }
 
 func (vc *VoiceChanger) resetLocked() {
@@ -193,6 +224,7 @@ func (vc *VoiceChanger) resetLocked() {
 	vc.hopOut = vc.hopOut[:0]
 	clear(vc.prevPhase)
 	clear(vc.synPhase)
+	vc.voicedEWMA = 1.0
 	vc.hpX1, vc.hpX2, vc.hpY1, vc.hpY2 = 0, 0, 0, 0
 }
 
@@ -210,7 +242,6 @@ func (vc *VoiceChanger) Process(samples []float32) {
 		return
 	}
 
-	// Preserve dry signal if crossfading ON <-> OFF
 	needFade := wantOn != vc.wasEnabled
 	if needFade {
 		if cap(vc.dryCopy) < len(samples) {
@@ -223,19 +254,18 @@ func (vc *VoiceChanger) Process(samples []float32) {
 
 	pitchRatio := math.Pow(2.0, vc.pitchSemitones/12.0)
 	formantRatio := vc.formantRatio
+	softness := vc.softness
 	hpOn := vc.hpEnabled
 
-	// Feed samples through hop-based STFT processor
 	for _, s := range samples {
 		vc.hopIn = append(vc.hopIn, float64(s))
 		if len(vc.hopIn) >= vcHopSize {
-			vc.processHopLocked(vc.hopIn[:vcHopSize], pitchRatio, formantRatio)
+			vc.processHopLocked(vc.hopIn[:vcHopSize], pitchRatio, formantRatio, softness)
 			copy(vc.hopIn, vc.hopIn[vcHopSize:])
 			vc.hopIn = vc.hopIn[:len(vc.hopIn)-vcHopSize]
 		}
 	}
 
-	// Pull processed samples
 	n := len(samples)
 	if len(vc.hopOut) >= n {
 		for i := 0; i < n; i++ {
@@ -248,7 +278,6 @@ func (vc *VoiceChanger) Process(samples []float32) {
 		copy(vc.hopOut, vc.hopOut[n:])
 		vc.hopOut = vc.hopOut[:len(vc.hopOut)-n]
 	} else {
-		// Pad any initial startup latency with silence
 		offset := n - len(vc.hopOut)
 		for i := 0; i < offset; i++ {
 			samples[i] = 0
@@ -266,14 +295,12 @@ func (vc *VoiceChanger) Process(samples []float32) {
 	if needFade {
 		invN := float32(1.0) / float32(n)
 		if wantOn {
-			// OFF -> ON crossfade
 			for i := 0; i < n; i++ {
 				alpha := float32(i) * invN
 				samples[i] = vc.dryCopy[i]*(1-alpha) + samples[i]*alpha
 			}
 			vc.wasEnabled = true
 		} else {
-			// ON -> OFF crossfade
 			for i := 0; i < n; i++ {
 				alpha := float32(i) * invN
 				samples[i] = samples[i]*(1-alpha) + vc.dryCopy[i]*alpha
@@ -301,8 +328,111 @@ func wrapPhase(p float64) float64 {
 	return p - math.Pi
 }
 
-func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio, formantRatio float64) {
-	// Shift input ring left by vcHopSize and append new hop
+// computeTrueEnvelopeLocked estimates the upper spectral envelope of harmonic peaks
+// via iterated cepstral liftering (True Envelope), avoiding the muffled valleys of plain cepstrum.
+func (vc *VoiceChanger) computeTrueEnvelopeLocked() {
+	copy(vc.envLog, vc.logMag)
+
+	for iter := 0; iter < vcTEIters; iter++ {
+		for k := 0; k < vcHalfBins; k++ {
+			v := vc.envLog[k]
+			vc.cepRe[k] = v
+			vc.cepIm[k] = 0
+			if k > 0 && k < vcHalfBins-1 {
+				vc.cepRe[vcFFTSize-k] = v
+				vc.cepIm[vcFFTSize-k] = 0
+			}
+		}
+		vc.fft.Transform(vc.cepRe, vc.cepIm, true)
+		for q := 0; q < vcFFTSize; q++ {
+			dist := q
+			if dist > vcFFTSize/2 {
+				dist = vcFFTSize - dist
+			}
+			if dist > vcCepOrder {
+				vc.cepRe[q] = 0
+				vc.cepIm[q] = 0
+			} else if dist > vcCepOrder-vcCepTaper {
+				t := float64(vcCepOrder-dist) / float64(vcCepTaper)
+				vc.cepRe[q] *= t
+				vc.cepIm[q] = 0
+			} else {
+				vc.cepIm[q] = 0
+			}
+		}
+		vc.fft.Transform(vc.cepRe, vc.cepIm, false)
+		for k := 0; k < vcHalfBins; k++ {
+			smoothed := vc.cepRe[k]
+			if iter < vcTEIters-1 && vc.logMag[k] > smoothed {
+				vc.envLog[k] = vc.logMag[k]
+			} else {
+				vc.envLog[k] = smoothed
+			}
+		}
+	}
+
+	for k := 0; k < vcHalfBins; k++ {
+		e := math.Exp(vc.envLog[k])
+		if e < 1e-6 {
+			e = 1e-6
+		}
+		vc.env[k] = e
+	}
+}
+
+// nonLinearFormantSrc maps a target frequency bin to its source envelope coordinate,
+// shifting F1/F2/F3 (0..3800Hz) strongly while smoothly returning to 1.0x above 6000Hz
+// so sibilants ("s", "sh") stay natural rather than turning shrill/metallic.
+func (vc *VoiceChanger) nonLinearFormantSrc(bin int, formantRatio float64) float64 {
+	binHz := vc.sampleRate / float64(vcFFTSize)
+	freq := float64(bin) * binHz
+
+	const lowKnee = 3800.0
+	const highKnee = 6200.0
+	var effRatio float64
+	switch {
+	case freq <= lowKnee:
+		effRatio = formantRatio
+	case freq >= highKnee:
+		effRatio = 1.0
+	default:
+		t := (freq - lowKnee) / (highKnee - lowKnee)
+		// Smooth cosine transition
+		blend := 0.5 * (1.0 + math.Cos(math.Pi*t))
+		effRatio = 1.0 + (formantRatio-1.0)*blend
+	}
+	return float64(bin) / effRatio
+}
+
+// softnessGain applies subtle female vocal tract shaping:
+// gently trims male chest resonance (~180Hz), softens harsh 1.6-2.8kHz buzz,
+// and adds light airy presence around 5-7kHz.
+func (vc *VoiceChanger) softnessGain(bin int, softness float64) float64 {
+	if softness <= 0.001 {
+		return 1.0
+	}
+	freq := float64(bin) * vc.sampleRate / float64(vcFFTSize)
+	gainDB := 0.0
+
+	// 1. Gentle chest boom attenuation around 180Hz
+	if freq > 80 && freq < 340 {
+		d := (freq - 180.0) / 90.0
+		gainDB -= 3.5 * softness * math.Exp(-0.5*d*d)
+	}
+	// 2. Soften harsh upper-mid vocal buzz (1.6-2.8kHz)
+	if freq > 1000 && freq < 3600 {
+		d := (freq - 2100.0) / 650.0
+		gainDB -= 2.0 * softness * math.Exp(-0.5*d*d)
+	}
+	// 3. Light feminine air/breathiness around 5.2kHz
+	if freq > 3500 && freq < 8500 {
+		d := (freq - 5400.0) / 1400.0
+		gainDB += 2.2 * softness * math.Exp(-0.5*d*d)
+	}
+	return math.Pow(10.0, gainDB/20.0)
+}
+
+func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio, formantRatio, softness float64) {
 	copy(vc.inRing, vc.inRing[vcHopSize:])
 	copy(vc.inRing[vcFFTSize-vcHopSize:], inHop)
 
@@ -313,76 +443,124 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio, formantRat
 	}
 	vc.fft.Transform(vc.re, vc.im, false)
 
-	// Compute magnitudes & log-magnitudes for cepstral envelope
+	// Magnitudes, phases, and V/UV energy ratio (low voiced band 90-1400Hz vs high fricative band 3200-9000Hz)
+	binHz := vc.sampleRate / float64(vcFFTSize)
+	lowStart := int(90.0 / binHz)
+	lowEnd := int(1400.0 / binHz)
+	highStart := int(3200.0 / binHz)
+	highEnd := int(9000.0 / binHz)
+	if highEnd >= vcHalfBins {
+		highEnd = vcHalfBins - 1
+	}
+
+	var lowEnergy, highEnergy, maxMag float64
 	for k := 0; k < vcHalfBins; k++ {
 		m := math.Hypot(vc.re[k], vc.im[k])
 		vc.mag[k] = m
-		lm := math.Log(math.Max(m, 1e-7))
-		vc.cepRe[k] = lm
-		vc.cepIm[k] = 0
-		if k > 0 && k < vcHalfBins-1 {
-			vc.cepRe[vcFFTSize-k] = lm
-			vc.cepIm[vcFFTSize-k] = 0
+		vc.anaPhase[k] = math.Atan2(vc.im[k], vc.re[k])
+		vc.logMag[k] = math.Log(math.Max(m, 1e-7))
+		if m > maxMag {
+			maxMag = m
+		}
+		e := m * m
+		if k >= lowStart && k <= lowEnd {
+			lowEnergy += e
+		} else if k >= highStart && k <= highEnd {
+			highEnergy += e
 		}
 	}
 
-	// Real cepstrum liftering to extract smooth vocal-tract spectral envelope
-	vc.fft.Transform(vc.cepRe, vc.cepIm, true)
-	for q := 0; q < vcFFTSize; q++ {
-		dist := q
-		if dist > vcFFTSize/2 {
-			dist = vcFFTSize - dist
-		}
-		if dist > vcCepOrder {
-			vc.cepRe[q] = 0
-			vc.cepIm[q] = 0
-		} else if dist > vcCepOrder-vcCepTaper {
-			t := float64(vcCepOrder-dist) / float64(vcCepTaper)
-			vc.cepRe[q] *= t
-			vc.cepIm[q] = 0
-		} else {
-			vc.cepIm[q] = 0
+	// Smoothly estimate voicedness in [0, 1]
+	voicedInstant := 1.0
+	if lowEnergy+highEnergy > 1e-10 {
+		ratio := lowEnergy / (lowEnergy + highEnergy)
+		// Voiced vowels have >0.55 low-band energy; unvoiced "s/sh/t" have <0.25
+		voicedInstant = (ratio - 0.20) / 0.40
+		if voicedInstant < 0 {
+			voicedInstant = 0
+		} else if voicedInstant > 1 {
+			voicedInstant = 1
 		}
 	}
-	vc.fft.Transform(vc.cepRe, vc.cepIm, false)
-	for k := 0; k < vcHalfBins; k++ {
-		e := math.Exp(vc.cepRe[k])
-		if e < 1e-6 {
-			e = 1e-6
+	vc.voicedEWMA = 0.7*vc.voicedEWMA + 0.3*voicedInstant
+	voiced := vc.voicedEWMA
+
+	// Extract True Envelope (upper harmonic hull)
+	vc.computeTrueEnvelopeLocked()
+
+	// Detect spectral peaks for Identity Phase Locking
+	vc.peaks = vc.peaks[:0]
+	peakFloor := maxMag * 1e-4
+	for k := 2; k < vcHalfBins-2; k++ {
+		mk := vc.mag[k]
+		if mk > peakFloor && mk > vc.mag[k-1] && mk >= vc.mag[k+1] {
+			vc.peaks = append(vc.peaks, k)
 		}
-		vc.env[k] = e
 	}
 
-	// Phase vocoder pitch shift on flattened excitation spectrum
+	// Synthesize pitch-shifted excitation with Identity Phase Locking (region-of-influence)
+	clear(vc.synOutRe)
+	clear(vc.synOutIm)
 	clear(vc.synMag)
-	clear(vc.synFreq)
+
 	expectedPhaseInc := 2.0 * math.Pi * float64(vcHopSize) / float64(vcFFTSize)
+	// Effective pitch ratio blends gently toward 1.0 on purely unvoiced consonants
+	effPitch := 1.0 + (pitchRatio-1.0)*voiced
 
-	for k := 0; k < vcHalfBins; k++ {
-		phase := math.Atan2(vc.im[k], vc.re[k])
-		delta := phase - vc.prevPhase[k]
-		vc.prevPhase[k] = phase
+	for idx, p := range vc.peaks {
+		// Region of influence: midpoints to neighboring peaks
+		regStart := 1
+		if idx > 0 {
+			regStart = (vc.peaks[idx-1] + p) / 2
+		}
+		regEnd := vcHalfBins - 2
+		if idx+1 < len(vc.peaks) {
+			regEnd = (p + vc.peaks[idx+1]) / 2
+		}
+		// Limit region width so wide valleys don't bleed across formants
+		if p-regStart > 12 {
+			regStart = p - 12
+		}
+		if regEnd-p > 12 {
+			regEnd = p + 12
+		}
 
-		expected := float64(k) * expectedPhaseInc
-		dev := wrapPhase(delta - expected)
-		trueFreq := expected + dev
+		// Advance peak phase using instantaneous frequency
+		delta := vc.anaPhase[p] - vc.prevPhase[p]
+		expected := float64(p) * expectedPhaseInc
+		trueFreq := expected + wrapPhase(delta-expected)
 
-		dst := int(math.Round(float64(k) * pitchRatio))
-		if dst >= 0 && dst < vcHalfBins {
-			exc := vc.mag[k] / vc.env[k]
-			// Keep dominant excitation component per destination bin to avoid phase cancellation
-			if exc > vc.synMag[dst] {
-				vc.synMag[dst] = exc
-				vc.synFreq[dst] = trueFreq * pitchRatio
+		dstP := int(math.Round(float64(p) * effPitch))
+		if dstP < 1 || dstP >= vcHalfBins-1 {
+			continue
+		}
+		vc.synPhase[dstP] = wrapPhase(vc.synPhase[dstP] + trueFreq*effPitch)
+		rot := vc.synPhase[dstP] - vc.anaPhase[p]
+
+		// Copy entire harmonic lobe with locked relative phase (Identity Phase Locking)
+		for k := regStart; k <= regEnd; k++ {
+			dst := dstP + (k - p)
+			if dst < 1 || dst >= vcHalfBins-1 {
+				continue
 			}
+			exc := vc.mag[k] / vc.env[k]
+			lockedPhase := vc.anaPhase[k] + rot
+			vc.synOutRe[dst] += exc * math.Cos(lockedPhase)
+			vc.synOutIm[dst] += exc * math.Sin(lockedPhase)
 		}
 	}
 
-	// Apply independent formant-warped spectral envelope & reconstruct complex spectrum
-	for j := 0; j < vcHalfBins; j++ {
-		vc.synPhase[j] = wrapPhase(vc.synPhase[j] + vc.synFreq[j])
+	// Update prevPhase for next hop
+	copy(vc.prevPhase, vc.anaPhase)
 
-		srcF := float64(j) / formantRatio
+	// Apply non-linear formant-warped envelope + softness EQ and reconstruct full complex spectrum
+	vc.re[0] = 0
+	vc.im[0] = 0
+	vc.re[vcHalfBins-1] = 0
+	vc.im[vcHalfBins-1] = 0
+
+	for j := 1; j < vcHalfBins-1; j++ {
+		srcF := vc.nonLinearFormantSrc(j, formantRatio)
 		var warpedEnv float64
 		if srcF >= float64(vcHalfBins-1) {
 			warpedEnv = vc.env[vcHalfBins-1] * 0.5
@@ -392,18 +570,24 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio, formantRat
 			warpedEnv = vc.env[idx]*(1.0-frac) + vc.env[idx+1]*frac
 		}
 
-		finalMag := vc.synMag[j] * warpedEnv
-		cr := finalMag * math.Cos(vc.synPhase[j])
-		ci := finalMag * math.Sin(vc.synPhase[j])
+		scale := warpedEnv * vc.softnessGain(j, softness)
+
+		// Blend unvoiced high-frequency texture smoothly to preserve crisp consonants
+		cr := vc.synOutRe[j] * scale
+		ci := vc.synOutIm[j] * scale
+		if voiced < 0.85 {
+			unvoicedWeight := (1.0 - voiced) * 0.65
+			// Keep original unvoiced phase/magnitude with gentle softness shaping
+			rawScale := vc.softnessGain(j, softness)
+			cr = cr*(1.0-unvoicedWeight) + vc.re[j]*rawScale*unvoicedWeight
+			ci = ci*(1.0-unvoicedWeight) + vc.im[j]*rawScale*unvoicedWeight
+		}
+
 		vc.re[j] = cr
 		vc.im[j] = ci
-		if j > 0 && j < vcHalfBins-1 {
-			vc.re[vcFFTSize-j] = cr
-			vc.im[vcFFTSize-j] = -ci
-		}
+		vc.re[vcFFTSize-j] = cr
+		vc.im[vcFFTSize-j] = -ci
 	}
-	vc.im[0] = 0
-	vc.im[vcHalfBins-1] = 0
 
 	// Inverse FFT + synthesis window + overlap-add
 	vc.fft.Transform(vc.re, vc.im, true)
@@ -411,7 +595,6 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio, formantRat
 		vc.outOLA[i] += vc.re[i] * vc.window[i]
 	}
 
-	// Emit normalized hop and shift OLA accumulator
 	for i := 0; i < vcHopSize; i++ {
 		vc.hopOut = append(vc.hopOut, vc.outOLA[i]*vc.olaNorm[i])
 	}

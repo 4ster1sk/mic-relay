@@ -27,6 +27,7 @@ type VoiceChangerConfig struct {
 	Enabled         bool    `json:"enabled"`
 	PitchSemitones  float64 `json:"pitch_semitones"`
 	FormantRatio    float64 `json:"formant_ratio"`
+	Softness        float64 `json:"softness"`
 	HighPassEnabled bool    `json:"high_pass_enabled"`
 }
 
@@ -76,8 +77,9 @@ func Default() Config {
 			GateThresholdDB:  -45.0,
 			VoiceChanger: VoiceChangerConfig{
 				Enabled:         false,
-				PitchSemitones:  5.0,
-				FormantRatio:    1.18,
+				PitchSemitones:  4.5,
+				FormantRatio:    1.16,
+				Softness:        0.45,
 				HighPassEnabled: true,
 			},
 			CodecMode:  CodecModePCM,
@@ -129,7 +131,10 @@ func Load(path string) (Config, error) {
 		cfg.TX.CodecMode = CodecModePCM
 	}
 	if cfg.TX.VoiceChanger.FormantRatio < 0.75 || cfg.TX.VoiceChanger.FormantRatio > 1.45 {
-		cfg.TX.VoiceChanger.FormantRatio = 1.18
+		cfg.TX.VoiceChanger.FormantRatio = 1.16
+	}
+	if cfg.TX.VoiceChanger.Softness < 0 || cfg.TX.VoiceChanger.Softness > 1 {
+		cfg.TX.VoiceChanger.Softness = 0.45
 	}
 	return cfg, nil
 }

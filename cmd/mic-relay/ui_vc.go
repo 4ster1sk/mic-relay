@@ -74,7 +74,7 @@ func (ra *RelayApp) setVoiceChangerEnabled(on bool) {
 
 func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable bool) {
 	if ra.voiceChanger != nil {
-		ra.voiceChanger.SetParams(p.PitchSemitones, p.FormantRatio, p.HighPassEnabled)
+		ra.voiceChanger.SetParams(p.PitchSemitones, p.FormantRatio, p.Softness, p.HighPassEnabled)
 		if enable {
 			ra.voiceChanger.SetEnabled(true)
 		}
@@ -82,6 +82,7 @@ func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable boo
 	ra.cfgMu.Lock()
 	ra.cfg.TX.VoiceChanger.PitchSemitones = p.PitchSemitones
 	ra.cfg.TX.VoiceChanger.FormantRatio = p.FormantRatio
+	ra.cfg.TX.VoiceChanger.Softness = p.Softness
 	ra.cfg.TX.VoiceChanger.HighPassEnabled = p.HighPassEnabled
 	if enable {
 		ra.cfg.TX.VoiceChanger.Enabled = true
@@ -136,21 +137,29 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 	formantSlider.Step = 0.02
 	formantSlider.Value = vcCfg.FormantRatio
 
-	hpCheck := widget.NewCheck("胸声カット HPF (130Hz) を有効にする", nil)
+	softVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Softness*100))
+	softSlider := widget.NewSlider(0, 100)
+	softSlider.Step = 5
+	softSlider.Value = vcCfg.Softness * 100
+
+	hpCheck := widget.NewCheck("胸声カット HPF (145Hz) を有効にする", nil)
 	hpCheck.Checked = vcCfg.HighPassEnabled
 
 	updateParams := func() {
 		p := math.Round(pitchSlider.Value*2) / 2
 		f := math.Round(formantSlider.Value*100) / 100
+		s := math.Round(softSlider.Value) / 100.0
 		hp := hpCheck.Checked
 		pitchVal.SetText(fmt.Sprintf("%+.1f 半音", p))
 		formantVal.SetText(fmt.Sprintf("%.2fx", f))
+		softVal.SetText(fmt.Sprintf("%.0f%%", s*100))
 		if ra.voiceChanger != nil {
-			ra.voiceChanger.SetParams(p, f, hp)
+			ra.voiceChanger.SetParams(p, f, s, hp)
 		}
 		ra.cfgMu.Lock()
 		ra.cfg.TX.VoiceChanger.PitchSemitones = p
 		ra.cfg.TX.VoiceChanger.FormantRatio = f
+		ra.cfg.TX.VoiceChanger.Softness = s
 		ra.cfg.TX.VoiceChanger.HighPassEnabled = hp
 		ra.cfgMu.Unlock()
 		ra.syncMenuState()
@@ -160,6 +169,8 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 	pitchSlider.OnChangeEnded = func(_ float64) { ra.saveConfig() }
 	formantSlider.OnChanged = func(_ float64) { updateParams() }
 	formantSlider.OnChangeEnded = func(_ float64) { ra.saveConfig() }
+	softSlider.OnChanged = func(_ float64) { updateParams() }
+	softSlider.OnChangeEnded = func(_ float64) { ra.saveConfig() }
 	hpCheck.OnChanged = func(_ bool) {
 		updateParams()
 		ra.saveConfig()
@@ -170,6 +181,7 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 		enableCheck.SetChecked(true)
 		pitchSlider.SetValue(p.PitchSemitones)
 		formantSlider.SetValue(p.FormantRatio)
+		softSlider.SetValue(p.Softness * 100)
 		hpCheck.SetChecked(p.HighPassEnabled)
 	}
 
@@ -197,6 +209,7 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 		widget.NewSeparator(),
 		container.NewBorder(nil, nil, widget.NewLabel("ピッチ (音程)"), pitchVal, pitchSlider),
 		container.NewBorder(nil, nil, widget.NewLabel("フォルマント (声質)"), formantVal, formantSlider),
+		container.NewBorder(nil, nil, widget.NewLabel("柔らかさ (息・丸み)"), softVal, softSlider),
 		hpCheck,
 		widget.NewSeparator(),
 		monitorCheck,
@@ -204,6 +217,6 @@ func (ra *RelayApp) showVoiceChangerDialog() {
 	)
 
 	d := dialog.NewCustom("ボイチェン詳細調整・ローカル試聴", "閉じる", body, ra.win)
-	d.Resize(fyne.NewSize(460, 360))
+	d.Resize(fyne.NewSize(470, 400))
 	d.Show()
 }

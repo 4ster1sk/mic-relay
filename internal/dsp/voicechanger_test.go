@@ -2,14 +2,15 @@ package dsp
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 )
 
 func TestFFTRoundTrip(t *testing.T) {
-	fft := NewFFT(1024)
-	re := make([]float64, 1024)
-	im := make([]float64, 1024)
-	orig := make([]float64, 1024)
+	fft := NewFFT(2048)
+	re := make([]float64, 2048)
+	im := make([]float64, 2048)
+	orig := make([]float64, 2048)
 	for i := range re {
 		orig[i] = math.Sin(2*math.Pi*440*float64(i)/48000) + 0.3*math.Cos(2*math.Pi*1200*float64(i)/48000)
 		re[i] = orig[i]
@@ -41,17 +42,22 @@ func TestVoiceChangerPassthroughAndPitchShift(t *testing.T) {
 		}
 	}
 
-	// 2. Enabled with +7 semitones (~1.498x): 200Hz -> ~300Hz
-	vc.SetParams(7.0, 1.20, false)
+	// 2. Enabled with +7 semitones (~1.498x) on harmonic voice-like signal (180Hz + harmonics) -> ~270Hz
+	vc.SetParams(7.0, 1.20, 0.4, false)
 	vc.SetEnabled(true)
 
-	const totalSamples = 480 * 25 // 250ms
-	outAll := make([]float32, 0, totalSamples)
+	const totalFrames = 30 // 300ms
+	outAll := make([]float32, 0, 480*totalFrames)
 	frame := make([]float32, 480)
 	sampleIdx := 0
-	for f := 0; f < 25; f++ {
+	for f := 0; f < totalFrames; f++ {
 		for i := range frame {
-			frame[i] = 0.5 * float32(math.Sin(2*math.Pi*200.0*float64(sampleIdx)/48000.0))
+			tSec := float64(sampleIdx) / 48000.0
+			frame[i] = float32(
+				0.45*math.Sin(2*math.Pi*180.0*tSec) +
+					0.25*math.Sin(2*math.Pi*360.0*tSec) +
+					0.12*math.Sin(2*math.Pi*540.0*tSec),
+			)
 			sampleIdx++
 		}
 		vc.Process(frame)
@@ -63,7 +69,7 @@ func TestVoiceChangerPassthroughAndPitchShift(t *testing.T) {
 		outAll = append(outAll, frame...)
 	}
 
-	// Analyze steady-state tail with 2048-point FFT to find dominant frequency peak
+	// Analyze steady-state tail with 2048-point FFT to find dominant fundamental peak
 	const anaN = 2048
 	tail := outAll[len(outAll)-anaN:]
 	anaFFT := NewFFT(anaN)
@@ -75,21 +81,37 @@ func TestVoiceChangerPassthroughAndPitchShift(t *testing.T) {
 	}
 	anaFFT.Transform(re, im, false)
 
-	bestBin := 1
+	// Search fundamental band 150..400Hz
+	binHz := 48000.0 / float64(anaN)
+	bestBin := int(150.0 / binHz)
 	bestMag := 0.0
-	for k := 1; k < anaN/2; k++ {
+	for k := int(150.0 / binHz); k <= int(400.0/binHz); k++ {
 		m := math.Hypot(re[k], im[k])
 		if m > bestMag {
 			bestMag = m
 			bestBin = k
 		}
 	}
-	peakHz := float64(bestBin) * 48000.0 / float64(anaN)
-	if peakHz < 270 || peakHz > 330 {
-		t.Fatalf("expected shifted peak near ~300Hz, got %.1f Hz (bin %d)", peakHz, bestBin)
+	peakHz := float64(bestBin) * binHz
+	if peakHz < 245 || peakHz > 295 {
+		t.Fatalf("expected shifted fundamental near ~270Hz, got %.1f Hz (bin %d)", peakHz, bestBin)
 	}
 
-	// 3. Toggle OFF cleanly
+	// 3. Unvoiced noise (simulating "s/sh") remains finite and stable
+	rng := rand.New(rand.NewSource(7))
+	for f := 0; f < 5; f++ {
+		for i := range frame {
+			frame[i] = (rng.Float32()*2 - 1) * 0.2
+		}
+		vc.Process(frame)
+		for i, s := range frame {
+			if math.IsNaN(float64(s)) || math.IsInf(float64(s), 0) {
+				t.Fatalf("NaN/Inf on unvoiced noise at frame %d sample %d", f, i)
+			}
+		}
+	}
+
+	// 4. Toggle OFF cleanly
 	vc.SetEnabled(false)
 	vc.Process(frame)
 	for i, s := range frame {
