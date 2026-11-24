@@ -180,3 +180,13 @@ func TestSliderIgnoresDragWithoutMouseDown(t *testing.T) {
 		t.Fatalf("tap failed: val=%.1f prev=%.1f ended=%d", sl.Value, afterDragVal, endedCount)
 	}
 }
+
+func TestBringWindowToFront(t *testing.T) {
+	BringWindowToFront(nil)
+
+	a := test.NewApp()
+	defer a.Quit()
+	w := test.NewWindow(NewHoldButton("test", nil, nil))
+	defer w.Close()
+	BringWindowToFront(w)
+}

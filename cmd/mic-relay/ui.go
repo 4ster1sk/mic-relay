@@ -406,8 +406,7 @@ func (ra *RelayApp) setupTrayAndClose() {
 	ra.tray = uiutil.SetupTray(ra.fyneApp, uiutil.TrayCallbacks{
 		OnShow: func() {
 			fyne.Do(func() {
-				ra.win.Show()
-				ra.win.RequestFocus()
+				uiutil.BringWindowToFront(ra.win)
 			})
 		},
 		OnToggleTXMute: func() {
