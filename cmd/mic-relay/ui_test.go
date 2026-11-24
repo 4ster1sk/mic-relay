@@ -156,6 +156,38 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	// Render at default 700x680
 	w.Resize(fyne.NewSize(700, 680))
 
+	// Verify long TX/RX status strip, probe, warning, and diagnostic texts do not expand window MinSize
+	baseMin := w.Content().MinSize()
+	ra.txStripLabel.SetText("● TX 送信中 [MUTE] [PTT発話] [VC] [試聴] → desktop-vrc.tail1a2b.ts.net:48101 (Opus 96k / RTT 12.3ms)")
+	ra.rxStripLabel.SetText("● RX 受信中 ← desktop-vrc.tail1a2b.ts.net:48101 (Opus 96k / Buf 30.0ms)")
+	ra.txProbeLabel.SetText("疎通 OK: desktop-vrc.tail1a2b.ts.net (windows) — RTT 12.3 ms")
+	ra.txStartStopBtn.SetText("■ 送信を停止")
+	ra.txVADLabel.SetText("VAD: 発話中")
+	ra.txPTTBtn.SetText("発話中... (離すとミュート)")
+	ra.txLoopWarnLabel.SetText("⚠ 警告: 受信側の仮想マイクが送信入力に選択されています（ハウリングの原因になります）")
+	ra.txLoopWarnLabel.Show()
+	ra.rxDiagSource.SetText("送信元: desktop-vrc.tail1a2b.ts.net:48101")
+	ra.rxDiagCodec.SetText("コーデック: Opus 96k (48kHz Mono)")
+	ra.rxDiagBuf.SetText("実効バッファ: 150.0 ms")
+	ra.rxDiagJitter.SetText("ジッター: 99.9 ms")
+	ra.rxDiagLoss.SetText("パケットロス: 12.34 %")
+	ra.rxDiagDrift.SetText("クロック補正: +1.23 %")
+
+	checkMinSize := func(tabName string) {
+		afterMin := w.Content().MinSize()
+		if afterMin.Width > baseMin.Width || afterMin.Width > 700 {
+			t.Fatalf("[%s] long status text expanded content MinSize width: before=%.1f after=%.1f", tabName, baseMin.Width, afterMin.Width)
+		}
+		if afterMin.Height > baseMin.Height || afterMin.Height > 680 {
+			t.Fatalf("[%s] long status text expanded content MinSize height: before=%.1f after=%.1f", tabName, baseMin.Height, afterMin.Height)
+		}
+	}
+	checkMinSize("TX")
+	ra.tabs.SelectIndex(1)
+	checkMinSize("RX")
+	ra.tabs.SelectIndex(0)
+	ra.txLoopWarnLabel.Hide()
+
 	if outDir := os.Getenv("MIC_RELAY_SCREENSHOT_DIR"); outDir != "" {
 		_ = os.MkdirAll(outDir, 0o755)
 		saveCapture := func(name string) {

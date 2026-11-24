@@ -9,7 +9,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"mic-relay/internal/audio"
@@ -245,6 +244,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	ra.txPortEntry.SetText(strconv.Itoa(ra.cfg.TX.TargetPort))
 
 	ra.txProbeLabel = widget.NewLabel("")
+	ra.txProbeLabel.Truncation = fyne.TextTruncateEllipsis
 
 	rescanBtn := widget.NewButton("再探索", func() {
 		go ra.refreshPeers()
@@ -262,7 +262,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	})
 
 	destCard := widget.NewCard("2. 送信先ピア (LAN 自動検出 / Tailscale / プリセット)", "", container.NewVBox(
-		container.NewHBox(ra.txProbeLabel, layout.NewSpacer(), rescanBtn, delPresetBtn),
+		container.NewBorder(nil, nil, nil, container.NewHBox(rescanBtn, delPresetBtn), ra.txProbeLabel),
 		tableWrap,
 		container.NewBorder(
 			nil, nil, nil,

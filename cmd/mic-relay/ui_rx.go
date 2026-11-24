@@ -128,6 +128,12 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 	ra.rxDiagJitter = widget.NewLabel("ジッター: 0.0 ms")
 	ra.rxDiagLoss = widget.NewLabel("パケットロス: 0.00 %")
 	ra.rxDiagDrift = widget.NewLabel("クロック補正: +0.00 %")
+	for _, lbl := range []*widget.Label{
+		ra.rxDiagSource, ra.rxDiagCodec, ra.rxDiagBuf,
+		ra.rxDiagJitter, ra.rxDiagLoss, ra.rxDiagDrift,
+	} {
+		lbl.Truncation = fyne.TextTruncateEllipsis
+	}
 
 	diagCard := widget.NewCard("3. リアルタイム診断", "", container.NewGridWithColumns(3,
 		ra.rxDiagSource,

@@ -130,7 +130,9 @@ func (ra *RelayApp) buildUI() {
 
 	// Top always-visible TX / RX status bar
 	ra.txStripLabel = widget.NewLabel("TX: 停止中")
+	ra.txStripLabel.Truncation = fyne.TextTruncateEllipsis
 	ra.rxStripLabel = widget.NewLabel("RX: 停止中")
+	ra.rxStripLabel.Truncation = fyne.TextTruncateEllipsis
 	statusStrip := container.NewGridWithColumns(2,
 		widget.NewCard("", "", ra.txStripLabel),
 		widget.NewCard("", "", ra.rxStripLabel),
