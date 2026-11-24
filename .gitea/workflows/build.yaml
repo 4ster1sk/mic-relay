@@ -28,8 +28,10 @@ jobs:
 
       - name: Install Fyne build headers for vet/test
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+          sudo chmod 1777 /tmp
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get -o APT::Sandbox::User=root update
+          sudo apt-get -o APT::Sandbox::User=root install -y pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
 
       - name: Run go vet & tests
         run: |
@@ -47,8 +49,10 @@ jobs:
 
       - name: Install Debian 12 build dependencies
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
+          chmod 1777 /tmp
+          rm -rf /var/lib/apt/lists/*
+          apt-get -o APT::Sandbox::User=root update
+          apt-get -o APT::Sandbox::User=root install -y --no-install-recommends \
             gcc pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev dpkg-dev ca-certificates
 
       - name: Determine version
@@ -96,8 +100,10 @@ jobs:
 
       - name: Install MinGW-w64 cross-compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
+          sudo chmod 1777 /tmp
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get -o APT::Sandbox::User=root update
+          sudo apt-get -o APT::Sandbox::User=root install -y gcc-mingw-w64-x86-64
 
       - name: Build Windows amd64 .exe
         env:
