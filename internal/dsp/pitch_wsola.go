@@ -219,6 +219,7 @@ type wsolaShifter struct {
 	stretchedLen int
 	resampPos    float64
 	smoothAlpha  float64
+	alphaInit    bool
 
 	// Anti-aliasing 2nd-order Butterworth LPF state (active when pitchRatio > 1.05)
 	lpfCutoff float64
@@ -261,6 +262,7 @@ func (ws *wsolaShifter) Reset() {
 	ws.stretchedLen = 2
 	ws.resampPos = 1.0
 	ws.smoothAlpha = 1.0
+	ws.alphaInit = false
 	ws.lpfCutoff = 0
 	ws.lpX1, ws.lpX2, ws.lpY1, ws.lpY2 = 0, 0, 0, 0
 }
@@ -492,8 +494,13 @@ func (ws *wsolaShifter) ProcessHop(inHop, outHop []float64, targetAlpha float64)
 	} else if targetAlpha > 2.6 {
 		targetAlpha = 2.6
 	}
-	// Smooth pitch ratio transitions to prevent clicks at V/UV boundaries or slider sweeps
-	ws.smoothAlpha = 0.65*ws.smoothAlpha + 0.35*targetAlpha
+	// Initialize immediately on first hop after Reset, then smooth slider sweeps
+	if !ws.alphaInit {
+		ws.smoothAlpha = targetAlpha
+		ws.alphaInit = true
+	} else {
+		ws.smoothAlpha = 0.65*ws.smoothAlpha + 0.35*targetAlpha
+	}
 	alpha := ws.smoothAlpha
 
 	n := len(inHop)

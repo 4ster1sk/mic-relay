@@ -91,7 +91,7 @@ var (
 			Breathiness:     0.22,
 			Softness:        0.55,
 			HighPassEnabled: true,
-			HighPassHz:      170.0,
+			HighPassHz:      110.0,
 			DeEsser:         0.35,
 		},
 	}
@@ -105,7 +105,7 @@ var (
 			Breathiness:     0.32,
 			Softness:        0.65,
 			HighPassEnabled: true,
-			HighPassHz:      200.0,
+			HighPassHz:      125.0,
 			DeEsser:         0.45,
 		},
 	}
@@ -119,7 +119,7 @@ var (
 			Breathiness:     0.42,
 			Softness:        0.70,
 			HighPassEnabled: true,
-			HighPassHz:      155.0,
+			HighPassHz:      100.0,
 			DeEsser:         0.40,
 		},
 	}
@@ -217,12 +217,13 @@ type VoiceChanger struct {
 	window []float64
 	olaNorm []float64
 
-	inRing  []float64 // length vcWinSize
-	outOLA  []float64 // length vcFFTSize
-	hopIn   []float64
-	hopPSh  []float64 // scratch length vcHopSize for WSOLA output
-	hopOut  []float64
-	dryCopy []float32
+	inRing    []float64 // length vcWinSize
+	noiseRing []float64 // length vcWinSize (continuous time-domain white noise for breathiness)
+	outOLA    []float64 // length vcFFTSize
+	hopIn     []float64
+	hopPSh    []float64 // scratch length vcHopSize for WSOLA output
+	hopOut    []float64
+	dryCopy   []float32
 
 	// Preallocated STFT / True Envelope scratch buffers (zero allocations in Process)
 	re     []float64
@@ -234,12 +235,13 @@ type VoiceChanger struct {
 	mag    []float64
 	env    []float64
 
-	voicedEWMA   float64
-	deEssGainDB  float64
-	rngState     uint64
+	voicedEWMA  float64
+	deEssGainDB float64
+	rngState    uint64
 
 	// 4th-order Butterworth HPF (2 cascaded biquads with Q1=0.5412, Q2=1.3066)
 	hpCutoffHz float64
+	hpSmoothHz float64
 	hp1        biquadState
 	hp2        biquadState
 }
@@ -260,6 +262,7 @@ func NewVoiceChanger(sampleRate int) *VoiceChanger {
 		window:     make([]float64, vcWinSize),
 		olaNorm:    make([]float64, vcHopSize),
 		inRing:     make([]float64, vcWinSize),
+		noiseRing:  make([]float64, vcWinSize),
 		outOLA:     make([]float64, vcFFTSize),
 		hopIn:      make([]float64, 0, vcHopSize*2),
 		hopPSh:     make([]float64, vcHopSize),
@@ -275,6 +278,7 @@ func NewVoiceChanger(sampleRate int) *VoiceChanger {
 		env:        make([]float64, vcHalfBins),
 		voicedEWMA: 0.0,
 		rngState:   0x9e3779b97f4a7c15,
+		hpSmoothHz: def.HighPassHz,
 	}
 
 	// Hann analysis window (length vcWinSize = 1024)
@@ -326,8 +330,12 @@ func (vc *VoiceChanger) IsEnabled() bool {
 func (vc *VoiceChanger) SetConfig(p VoiceChangerParams) {
 	p = p.Clamp()
 	vc.mu.Lock()
+	hpChanged := math.Abs(p.HighPassHz-vc.params.HighPassHz) >= 0.5
 	vc.params = p
-	vc.updateHPLocked(p.HighPassHz)
+	if hpChanged {
+		vc.hpSmoothHz = p.HighPassHz
+		vc.updateHPLocked(p.HighPassHz)
+	}
 	vc.mu.Unlock()
 }
 
@@ -347,8 +355,12 @@ func (vc *VoiceChanger) SetParams(pitchSemitones, formantRatio, softness float64
 	p.Softness = softness
 	p.HighPassEnabled = hpEnabled
 	p = p.Clamp()
+	hpChanged := math.Abs(p.HighPassHz-vc.params.HighPassHz) >= 0.5
 	vc.params = p
-	vc.updateHPLocked(p.HighPassHz)
+	if hpChanged {
+		vc.hpSmoothHz = p.HighPassHz
+		vc.updateHPLocked(p.HighPassHz)
+	}
 	vc.mu.Unlock()
 }
 
@@ -363,11 +375,14 @@ func (vc *VoiceChanger) resetLocked() {
 	vc.pitch.Reset()
 	vc.wsola.Reset()
 	clear(vc.inRing)
+	clear(vc.noiseRing)
 	clear(vc.outOLA)
 	vc.hopIn = vc.hopIn[:0]
 	vc.hopOut = vc.hopOut[:0]
 	vc.voicedEWMA = 0.0
 	vc.deEssGainDB = 0.0
+	vc.hpSmoothHz = vc.params.HighPassHz
+	vc.updateHPLocked(vc.params.HighPassHz)
 	vc.hp1.reset()
 	vc.hp2.reset()
 }
@@ -679,16 +694,24 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio float64, p 
 	}
 	inRMS = math.Sqrt(inRMS / float64(len(inHop)))
 
-	// Blend pitch ratio toward 1.0 on purely unvoiced consonants to keep "s/sh/t" crisp
-	// (retain a subtle 15% lift even on unvoiced to match smaller female vocal tract)
-	voicedForPitch := 0.15 + 0.85*yinVoiced
-	if inRMS < 1.5e-4 {
-		voicedForPitch = 1.0 // keep steady ratio through brief pauses to avoid pitch swoosh
-	}
-	targetAlpha := 1.0 + (pitchRatio-1.0)*voicedForPitch
+	// Keep pitch ratio steady across consonant/vowel boundaries so CV transitions
+	// never suffer from voicedness-induced pitch glides. High-frequency sibilant
+	// placement is restored by the formant anchor table (t4 = 6.4kHz).
+	targetAlpha := pitchRatio
 
 	// 2. Time-domain WSOLA + Cubic Resampling pitch shift
 	effAlpha := vc.wsola.ProcessHop(inHop, vc.hopPSh, targetAlpha)
+
+	// Maintain continuous unit-variance time-domain white noise stream for click-free,
+	// modulation-free formant-shaped breathiness synthesis.
+	if p.Breathiness > 0.001 {
+		const sqrt3 = 1.7320508075688772
+		copy(vc.noiseRing, vc.noiseRing[vcHopSize:])
+		base := vcWinSize - vcHopSize
+		for i := 0; i < vcHopSize; i++ {
+			vc.noiseRing[base+i] = (vc.nextRandUnit()*2.0 - 1.0) * sqrt3
+		}
+	}
 
 	// 3. Push pitch-shifted hop into zero-padded STFT ring buffer
 	copy(vc.inRing, vc.inRing[vcHopSize:])
@@ -749,6 +772,23 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio float64, p 
 	} else if f0Out > 650.0 {
 		f0Out = 650.0
 	}
+	// Keep HPF safely below shifted fundamental (H1) during upward pitch shifting
+	// so even deep voices with higher HPF settings retain warm fundamental energy.
+	targetHPF := p.HighPassHz
+	if effAlpha > 1.05 {
+		maxSafeHPF := 0.78 * f0Out
+		if maxSafeHPF < 80.0 {
+			maxSafeHPF = 80.0
+		}
+		if targetHPF > maxSafeHPF {
+			targetHPF = maxSafeHPF
+		}
+	}
+	vc.hpSmoothHz = 0.85*vc.hpSmoothHz + 0.15*targetHPF
+	if p.HighPassEnabled {
+		vc.updateHPLocked(vc.hpSmoothHz)
+	}
+
 	cepOrder := int(0.62 * (vc.sampleRate / f0Out))
 	vc.computeTrueEnvelopeLocked(cepOrder)
 
@@ -853,7 +893,23 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio float64, p 
 	vc.re[vcHalfBins-1] = 0
 	vc.im[vcHalfBins-1] = 0
 
-	doBreath := p.Breathiness > 0.001 && voiced > 0.12 && inRMS > 2e-4 && excRMS > 1e-4
+	breathGate := (voiced - 0.12) / 0.18
+	if breathGate < 0 {
+		breathGate = 0
+	} else if breathGate > 1 {
+		breathGate = 1
+	}
+	doBreath := p.Breathiness > 0.001 && breathGate > 0 && inRMS > 2e-4 && excRMS > 1e-4
+	if doBreath {
+		// Reuse preallocated cepRe/cepIm (unused after computeTrueEnvelopeLocked) to FFT
+		// the continuous Hann-windowed noise stream for linear-convolution OLA.
+		clear(vc.cepRe)
+		clear(vc.cepIm)
+		for i := 0; i < vcWinSize; i++ {
+			vc.cepRe[vcPadLeft+i] = vc.noiseRing[i] * vc.window[i]
+		}
+		vc.fft.Transform(vc.cepRe, vc.cepIm, false)
+	}
 
 	for j := 1; j < vcHalfBins-1; j++ {
 		freq := float64(j) * binHz
@@ -861,22 +917,22 @@ func (vc *VoiceChanger) processHopLocked(inHop []float64, pitchRatio float64, p 
 		cr := vc.re[j] * g
 		ci := vc.im[j] * g
 
-		// Voiced-gated formant-shaped breathiness (aspiration noise shaped by warped vocal tract)
+		// Voiced-gated formant-shaped breathiness (continuous windowed aspiration noise
+		// shaped by the warped vocal tract; eliminates 200Hz hop-rate envelope modulation)
 		if doBreath {
 			bw := breathBandWeight(freq)
 			if bw > 0 {
 				// Slightly soften periodic buzz in breath band & inject formant-shaped silky air
-				harmKeep := 1.0 - 0.16*p.Breathiness*voiced*bw
+				harmKeep := 1.0 - 0.16*p.Breathiness*voiced*breathGate*bw
 				cr *= harmKeep
 				ci *= harmKeep
 
 				// Blend warped formant envelope with vowel core floor so airy shimmer works
-				// even when the dry mic rolls off above 4kHz
+				// even when the dry mic rolls off above 4kHz.
 				breathEnv := 0.70*vc.logMag[j] + 0.10*coreEnvAvg
-				amp := 1.65 * p.Breathiness * voiced * bw * excRMS * breathEnv
-				phi := vc.nextRandUnit() * 2.0 * math.Pi
-				cr += amp * math.Cos(phi)
-				ci += amp * math.Sin(phi)
+				gBreath := 0.050 * p.Breathiness * voiced * breathGate * bw * excRMS * breathEnv
+				cr += vc.cepRe[j] * gBreath
+				ci += vc.cepIm[j] * gBreath
 			}
 		}
 

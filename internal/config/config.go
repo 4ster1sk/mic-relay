@@ -90,7 +90,7 @@ func Default() Config {
 				Breathiness:     0.22,
 				Softness:        0.55,
 				HighPassEnabled: true,
-				HighPassHz:      170.0,
+				HighPassHz:      110.0,
 				DeEsser:         0.35,
 			},
 			CodecMode:  CodecModePCM,
@@ -160,7 +160,7 @@ func Load(path string) (Config, error) {
 		cfg.TX.VoiceChanger.Softness = 0.55
 	}
 	if cfg.TX.VoiceChanger.HighPassHz < 80 || cfg.TX.VoiceChanger.HighPassHz > 280 {
-		cfg.TX.VoiceChanger.HighPassHz = 170.0
+		cfg.TX.VoiceChanger.HighPassHz = 110.0
 	}
 	if cfg.TX.VoiceChanger.DeEsser < 0 || cfg.TX.VoiceChanger.DeEsser > 1 {
 		cfg.TX.VoiceChanger.DeEsser = 0.35

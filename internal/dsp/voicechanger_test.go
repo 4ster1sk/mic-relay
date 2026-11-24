@@ -419,6 +419,163 @@ func TestVoiceChangerPresetMax(t *testing.T) {
 	}
 }
 
+func TestVoiceChangerNoSyllablePitchGlide(t *testing.T) {
+	const sr = 48000
+	const cycleSamples = 11520 // 240ms: 60ms unvoiced consonant + 180ms voiced vowel
+	const totalSamples = cycleSamples * 6
+
+	vowel := synthVowel(sr, totalSamples, 115.0, 680.0, 1250.0)
+	rng := rand.New(rand.NewSource(42))
+	in := make([]float32, totalSamples)
+	for i := 0; i < totalSamples; i++ {
+		if i%cycleSamples < 2880 {
+			in[i] = float32((rng.Float64()*2 - 1) * 0.04)
+		} else {
+			in[i] = vowel[i]
+		}
+	}
+
+	p := PresetFemaleNatural.VoiceChangerParams
+	vc := NewVoiceChanger(sr)
+	vc.SetConfig(p)
+	vc.SetEnabled(true)
+
+	frame := make([]float32, 480)
+	minST, maxST := 999.0, -999.0
+	for off := 0; off+480 <= len(in); off += 480 {
+		copy(frame, in[off:off+480])
+		vc.Process(frame)
+		st := 12.0 * math.Log2(vc.wsola.smoothAlpha)
+		if st < minST {
+			minST = st
+		}
+		if st > maxST {
+			maxST = st
+		}
+	}
+	if math.Abs(minST-p.PitchSemitones) > 0.05 || math.Abs(maxST-p.PitchSemitones) > 0.05 {
+		t.Fatalf("expected steady pitch shift %.2f st across CV syllables, got range [%.2f, %.2f] st",
+			p.PitchSemitones, minST, maxST)
+	}
+}
+
+func TestVoiceChangerAdaptiveHPFPreservesDeepFundamental(t *testing.T) {
+	const sr = 48000
+	const f0In = 90.0 // Deep male fundamental
+	sig := synthVowel(sr, 480*60, f0In, 650.0, 1250.0)
+
+	runH1 := func(hpOn bool, hpHz float64) float64 {
+		p := PresetFemaleNatural.VoiceChangerParams
+		p.Breathiness = 0.0
+		p.DeEsser = 0.0
+		p.HighPassEnabled = hpOn
+		p.HighPassHz = hpHz
+		vc := NewVoiceChanger(sr)
+		vc.SetConfig(p)
+		vc.SetEnabled(true)
+		out := runVCFrames(t, vc, sig)
+		mag := analyzeSpectrum(out)
+		f0Out := f0In * math.Pow(2.0, p.PitchSemitones/12.0) // ~138.8Hz
+		return bandEnergy(mag, sr, f0Out-20.0, f0Out+20.0)
+	}
+
+	eOff := runH1(false, 110.0)
+	for _, tc := range []struct {
+		name string
+		hpHz float64
+	}{
+		{"PresetDefault110Hz", PresetFemaleNatural.HighPassHz},
+		{"LegacyHigh180Hz", 180.0},
+	} {
+		eOn := runH1(true, tc.hpHz)
+		gainDB := 10.0 * math.Log10((eOn+1e-20)/(eOff+1e-20))
+		if gainDB < -2.0 {
+			t.Fatalf("%s attenuated shifted H1 too much: %.2f dB (want >= -2.0 dB)", tc.name, gainDB)
+		}
+	}
+}
+
+func TestVoiceChangerBreathinessNoHopRateModulation(t *testing.T) {
+	const sr = 48000
+	const n = 48000 * 3
+	sig := synthVowel(sr, n, 115.0, 700.0, 1220.0)
+
+	run := func(breath float64) []float32 {
+		p := PresetFemaleNatural.VoiceChangerParams
+		p.Breathiness = breath
+		p.DeEsser = 0.0
+		vc := NewVoiceChanger(sr)
+		vc.SetConfig(p)
+		vc.SetEnabled(true)
+		return runVCFrames(t, vc, sig)
+	}
+
+	dry := run(0.0)
+	wet := run(0.45)
+
+	const anaN = 65536
+	start := n - anaN - 4800
+	re := make([]float64, anaN)
+	im := make([]float64, anaN)
+	for i := 0; i < anaN; i++ {
+		w := 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(anaN)))
+		re[i] = float64(wet[start+i]-dry[start+i]) * w
+	}
+	fft := NewFFT(anaN)
+	fft.Transform(re, im, false)
+
+	// Bandpass isolate 5-9 kHz breath component
+	binHz := float64(sr) / float64(anaN)
+	for k := 0; k < anaN; k++ {
+		f := float64(k) * binHz
+		if k > anaN/2 {
+			f = float64(anaN-k) * binHz
+		}
+		if f < 5000.0 || f > 9000.0 {
+			re[k] = 0
+			im[k] = 0
+		}
+	}
+	fft.Transform(re, im, true)
+
+	// Welch-averaged envelope modulation power spectrum (eliminates Rayleigh variance)
+	const segN = 16384
+	const segHop = 8192
+	segFFT := NewFFT(segN)
+	segRe := make([]float64, segN)
+	segIm := make([]float64, segN)
+	psd := make([]float64, segN/2+1)
+	segCount := 0
+	for s0 := 0; s0+segN <= anaN; s0 += segHop {
+		for i := 0; i < segN; i++ {
+			w := 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(segN)))
+			segRe[i] = (re[s0+i] * re[s0+i]) * w
+			segIm[i] = 0
+		}
+		segFFT.Transform(segRe, segIm, false)
+		for k := range psd {
+			psd[k] += segRe[k]*segRe[k] + segIm[k]*segIm[k]
+		}
+		segCount++
+	}
+	segBinHz := float64(sr) / float64(segN)
+	k200 := int(math.Round(200.0 / segBinHz))
+	pow200 := (psd[k200-1] + psd[k200] + psd[k200+1]) / 3.0
+	bgSum := 0.0
+	bgCnt := 0
+	for k := k200 - 40; k <= k200+40; k++ {
+		if k < k200-5 || k > k200+5 {
+			bgSum += psd[k]
+			bgCnt++
+		}
+	}
+	peakDB := 10.0 * math.Log10(pow200/(bgSum/float64(bgCnt)+1e-30))
+	t.Logf("200Hz breath envelope modulation vs background (Welch %d segs): %+.2f dB", segCount, peakDB)
+	if peakDB > 3.0 {
+		t.Fatalf("expected breathiness to have no 200Hz hop-rate modulation spike, got %+.2f dB", peakDB)
+	}
+}
+
 func BenchmarkVoiceChanger10msFrame(b *testing.B) {
 	vc := NewVoiceChanger(48000)
 	vc.SetConfig(PresetFemaleNatural.VoiceChangerParams)
