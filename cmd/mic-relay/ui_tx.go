@@ -518,6 +518,9 @@ func (ra *RelayApp) toggleTXStartStop() {
 		ra.stopTX()
 		return
 	}
+	if ra.receiver.IsRunning() {
+		return
+	}
 	host := strings.TrimSpace(ra.txHostEntry.Text)
 	port, err := strconv.Atoi(strings.TrimSpace(ra.txPortEntry.Text))
 	if host == "" || err != nil || port <= 0 || port > 65535 {
@@ -544,9 +547,7 @@ func (ra *RelayApp) toggleTXStartStop() {
 		return
 	}
 
-	ra.txStartStopBtn.SetText("■ 送信を停止")
-	ra.txStartStopBtn.Importance = widget.DangerImportance
-	ra.txStartStopBtn.Refresh()
+	ra.syncStartStopButtons()
 	ra.updateLoopWarning()
 	ra.syncTrayState()
 }
@@ -556,11 +557,9 @@ func (ra *RelayApp) stopTX() {
 	if !ra.capturer.IsRunning() {
 		ra.txDSP.ResetLevels()
 	}
-	if ra.txStartStopBtn != nil && !ra.shuttingDown.Load() {
+	if !ra.shuttingDown.Load() {
 		fyne.Do(func() {
-			ra.txStartStopBtn.SetText("▶ 送信を開始")
-			ra.txStartStopBtn.Importance = widget.HighImportance
-			ra.txStartStopBtn.Refresh()
+			ra.syncStartStopButtons()
 			ra.updateLoopWarning()
 			ra.syncTrayState()
 		})

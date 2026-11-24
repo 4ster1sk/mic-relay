@@ -230,6 +230,9 @@ func (ra *RelayApp) toggleRXStartStop() {
 		ra.stopRX()
 		return
 	}
+	if ra.sender.IsRunning() {
+		return
+	}
 
 	port, err := strconv.Atoi(strings.TrimSpace(ra.rxPortEntry.Text))
 	if err != nil || port <= 0 || port > 65535 {
@@ -286,9 +289,7 @@ func (ra *RelayApp) toggleRXStartStop() {
 		return
 	}
 
-	ra.rxStartStopBtn.SetText("■ 受信待機を停止")
-	ra.rxStartStopBtn.Importance = widget.DangerImportance
-	ra.rxStartStopBtn.Refresh()
+	ra.syncStartStopButtons()
 	ra.updateLoopWarning()
 	ra.syncTrayState()
 }
@@ -299,11 +300,9 @@ func (ra *RelayApp) stopRX() {
 	ra.discovery.Stop()
 	ra.virtualMic.Stop()
 	ra.rxDSP.ResetLevels()
-	if ra.rxStartStopBtn != nil && !ra.shuttingDown.Load() {
+	if !ra.shuttingDown.Load() {
 		fyne.Do(func() {
-			ra.rxStartStopBtn.SetText("▶ 受信待機を開始")
-			ra.rxStartStopBtn.Importance = widget.HighImportance
-			ra.rxStartStopBtn.Refresh()
+			ra.syncStartStopButtons()
 			ra.updateLoopWarning()
 			ra.syncTrayState()
 		})

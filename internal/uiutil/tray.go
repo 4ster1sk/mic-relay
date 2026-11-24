@@ -120,6 +120,7 @@ func (tc *TrayController) UpdateState(txRunning, txMuted, rnnoiseOn, vcOn, rxRun
 	} else {
 		tc.itemTXRun.Label = "TX 送信を開始"
 	}
+	tc.itemTXRun.Disabled = !txRunning && rxRunning
 	if rxMuted {
 		tc.itemRXMute.Label = "RX 出力ミュート切替 (ミュート中)"
 	} else {
@@ -130,5 +131,6 @@ func (tc *TrayController) UpdateState(txRunning, txMuted, rnnoiseOn, vcOn, rxRun
 	} else {
 		tc.itemRXRun.Label = "RX 受信待機を開始"
 	}
+	tc.itemRXRun.Disabled = !rxRunning && txRunning
 	tc.menu.Refresh()
 }

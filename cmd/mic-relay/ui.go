@@ -162,6 +162,46 @@ func (ra *RelayApp) buildUI() {
 	ra.buildMainMenu()
 	ra.setupPTTKeyHandler()
 	ra.setPTTEnabled(ra.cfg.TX.PushToTalk)
+	ra.syncStartStopButtons()
+}
+
+func (ra *RelayApp) syncStartStopButtons() {
+	txRunning := ra.sender != nil && ra.sender.IsRunning()
+	rxRunning := ra.receiver != nil && ra.receiver.IsRunning()
+
+	if ra.txStartStopBtn != nil {
+		if txRunning {
+			ra.txStartStopBtn.SetText("■ 送信を停止")
+			ra.txStartStopBtn.Importance = widget.DangerImportance
+			ra.txStartStopBtn.Enable()
+		} else if rxRunning {
+			ra.txStartStopBtn.SetText("▶ 送信を開始 (受信中は開始不可)")
+			ra.txStartStopBtn.Importance = widget.MediumImportance
+			ra.txStartStopBtn.Disable()
+		} else {
+			ra.txStartStopBtn.SetText("▶ 送信を開始")
+			ra.txStartStopBtn.Importance = widget.HighImportance
+			ra.txStartStopBtn.Enable()
+		}
+		ra.txStartStopBtn.Refresh()
+	}
+
+	if ra.rxStartStopBtn != nil {
+		if rxRunning {
+			ra.rxStartStopBtn.SetText("■ 受信待機を停止")
+			ra.rxStartStopBtn.Importance = widget.DangerImportance
+			ra.rxStartStopBtn.Enable()
+		} else if txRunning {
+			ra.rxStartStopBtn.SetText("▶ 受信待機を開始 (送信中は開始不可)")
+			ra.rxStartStopBtn.Importance = widget.MediumImportance
+			ra.rxStartStopBtn.Disable()
+		} else {
+			ra.rxStartStopBtn.SetText("▶ 受信待機を開始")
+			ra.rxStartStopBtn.Importance = widget.HighImportance
+			ra.rxStartStopBtn.Enable()
+		}
+		ra.rxStartStopBtn.Refresh()
+	}
 }
 
 func (ra *RelayApp) isTextInputFocused() bool {

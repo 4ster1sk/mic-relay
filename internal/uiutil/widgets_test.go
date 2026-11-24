@@ -190,3 +190,33 @@ func TestBringWindowToFront(t *testing.T) {
 	defer w.Close()
 	BringWindowToFront(w)
 }
+
+func TestTrayControllerMutualExclusion(t *testing.T) {
+	tc := &TrayController{
+		itemTXMute:  fyne.NewMenuItem("txmute", nil),
+		itemRNNoise: fyne.NewMenuItem("rnnoise", nil),
+		itemVC:      fyne.NewMenuItem("vc", nil),
+		itemTXRun:   fyne.NewMenuItem("txrun", nil),
+		itemRXMute:  fyne.NewMenuItem("rxmute", nil),
+		itemRXRun:   fyne.NewMenuItem("rxrun", nil),
+	}
+	tc.menu = fyne.NewMenu("Mic Relay", tc.itemTXMute, tc.itemRNNoise, tc.itemVC, tc.itemTXRun, tc.itemRXMute, tc.itemRXRun)
+
+	// Idle: both enabled
+	tc.UpdateState(false, false, true, false, false, false)
+	if tc.itemTXRun.Disabled || tc.itemRXRun.Disabled {
+		t.Fatalf("expected both TX/RX tray items enabled when idle")
+	}
+
+	// TX running: RX disabled, TX enabled
+	tc.UpdateState(true, false, true, false, false, false)
+	if tc.itemTXRun.Disabled || !tc.itemRXRun.Disabled {
+		t.Fatalf("expected RX tray item disabled while TX running")
+	}
+
+	// RX running: TX disabled, RX enabled
+	tc.UpdateState(false, false, true, false, true, false)
+	if !tc.itemTXRun.Disabled || tc.itemRXRun.Disabled {
+		t.Fatalf("expected TX tray item disabled while RX running")
+	}
+}

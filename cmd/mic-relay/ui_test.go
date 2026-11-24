@@ -153,6 +153,52 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 		t.Fatalf("expected TX unmuted when PTT disabled")
 	}
 
+	// Verify TX and RX start/stop buttons are mutually exclusive
+	if ra.txStartStopBtn.Disabled() || ra.rxStartStopBtn.Disabled() {
+		t.Fatalf("expected both TX and RX start buttons enabled initially")
+	}
+	if err := ra.sender.Start("127.0.0.1", 48199, config.CodecModePCM); err != nil {
+		t.Fatalf("sender.Start failed: %v", err)
+	}
+	ra.syncStartStopButtons()
+	if ra.txStartStopBtn.Disabled() || !ra.rxStartStopBtn.Disabled() {
+		t.Fatalf("expected RX start button disabled while TX is running (txDisabled=%v rxDisabled=%v)",
+			ra.txStartStopBtn.Disabled(), ra.rxStartStopBtn.Disabled())
+	}
+	ra.toggleRXStartStop()
+	if ra.receiver.IsRunning() {
+		t.Fatalf("expected toggleRXStartStop to be blocked while TX is running")
+	}
+	if len(w.Canvas().Overlays().List()) != 0 {
+		t.Fatalf("expected blocked toggleRXStartStop to return before showing any error dialog")
+	}
+	ra.sender.Stop()
+	ra.syncStartStopButtons()
+	if ra.txStartStopBtn.Disabled() || ra.rxStartStopBtn.Disabled() {
+		t.Fatalf("expected both buttons enabled after TX stops")
+	}
+
+	if err := ra.receiver.Start(0); err != nil {
+		t.Fatalf("receiver.Start failed: %v", err)
+	}
+	ra.syncStartStopButtons()
+	if !ra.txStartStopBtn.Disabled() || ra.rxStartStopBtn.Disabled() {
+		t.Fatalf("expected TX start button disabled while RX is running (txDisabled=%v rxDisabled=%v)",
+			ra.txStartStopBtn.Disabled(), ra.rxStartStopBtn.Disabled())
+	}
+	ra.toggleTXStartStop()
+	if ra.sender.IsRunning() {
+		t.Fatalf("expected toggleTXStartStop to be blocked while RX is running")
+	}
+	if len(w.Canvas().Overlays().List()) != 0 {
+		t.Fatalf("expected blocked toggleTXStartStop to return before showing any error dialog")
+	}
+	ra.receiver.Stop()
+	ra.syncStartStopButtons()
+	if ra.txStartStopBtn.Disabled() || ra.rxStartStopBtn.Disabled() {
+		t.Fatalf("expected both buttons enabled after RX stops")
+	}
+
 	// Render at default 700x680
 	w.Resize(fyne.NewSize(700, 680))
 
