@@ -137,6 +137,20 @@ var (
 			DeEsser:         0.20,
 		},
 	}
+	PresetMax = VoiceChangerPreset{
+		Name: "全パラメータ最大 (MAX)",
+		VoiceChangerParams: VoiceChangerParams{
+			PitchSemitones:  16.0,
+			FormantRatio:    1.45,
+			ThroatFormant:   1.30,
+			BrightFormant:   1.30,
+			Breathiness:     1.0,
+			Softness:        1.0,
+			HighPassEnabled: true,
+			HighPassHz:      280.0,
+			DeEsser:         1.0,
+		},
+	}
 )
 
 type biquadState struct {

@@ -305,6 +305,9 @@ func (ra *RelayApp) buildMainMenu() {
 	itemVCAndro := fyne.NewMenuItem("プリセット: 中性・少年声", func() {
 		ra.applyVoiceChangerPreset(dsp.PresetAndrogynous, true)
 	})
+	itemVCMax := fyne.NewMenuItem("プリセット: 全パラメータ最大 (MAX)", func() {
+		ra.applyVoiceChangerPreset(dsp.PresetMax, true)
+	})
 	ra.menuVCLocalMon = fyne.NewMenuItem("ローカル試聴 (スピーカーで確認)", func() {
 		next := !ra.monitorEnabled.Load()
 		if err := ra.setLocalMonitorEnabled(next); err != nil {
@@ -321,6 +324,7 @@ func (ra *RelayApp) buildMainMenu() {
 		itemVCFemaleHigh,
 		itemVCFemaleWhisper,
 		itemVCAndro,
+		itemVCMax,
 		fyne.NewMenuItemSeparator(),
 		ra.menuVCLocalMon,
 		itemVCDetail,

@@ -96,6 +96,11 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if vcCfg.Breathiness != dsp.PresetFemaleWhisper.Breathiness || vcCfg.HighPassHz != dsp.PresetFemaleWhisper.HighPassHz {
 		t.Fatalf("expected whisper preset params applied, got %+v", vcCfg)
 	}
+	ra.applyVoiceChangerPreset(dsp.PresetMax, true)
+	vcCfg = ra.voiceChanger.Config()
+	if vcCfg != dsp.PresetMax.VoiceChangerParams {
+		t.Fatalf("expected max preset params applied, got %+v want %+v", vcCfg, dsp.PresetMax.VoiceChangerParams)
+	}
 	// Verify Voice Changer detail dialog builds cleanly without panic
 	if vcUI := ra.buildVoiceChangerContent(); vcUI == nil {
 		t.Fatalf("expected non-nil voice changer dialog content")

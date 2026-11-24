@@ -285,6 +285,7 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		widget.NewButton("女声高め・カワボ", func() { applyPresetUI(dsp.PresetFemaleHigh) }),
 		widget.NewButton("お姉さん・ウィスパー", func() { applyPresetUI(dsp.PresetFemaleWhisper) }),
 		widget.NewButton("中性・少年声", func() { applyPresetUI(dsp.PresetAndrogynous) }),
+		widget.NewButton("全パラメータ最大 (MAX)", func() { applyPresetUI(dsp.PresetMax) }),
 	)
 
 	var monitorCheck *widget.Check

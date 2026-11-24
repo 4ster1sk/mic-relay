@@ -390,6 +390,35 @@ func TestVoiceChangerSoftnessHPFAndDeEsser(t *testing.T) {
 	}
 }
 
+func TestVoiceChangerPresetMax(t *testing.T) {
+	p := PresetMax.VoiceChangerParams
+	clamped := p.Clamp()
+	if clamped != p {
+		t.Fatalf("PresetMax params were altered by Clamp: got %+v want %+v", clamped, p)
+	}
+	if p.PitchSemitones != 16.0 ||
+		p.FormantRatio != 1.45 ||
+		p.ThroatFormant != 1.30 ||
+		p.BrightFormant != 1.30 ||
+		p.Breathiness != 1.0 ||
+		p.Softness != 1.0 ||
+		!p.HighPassEnabled ||
+		p.HighPassHz != 280.0 ||
+		p.DeEsser != 1.0 {
+		t.Fatalf("PresetMax does not match maximum parameter bounds: %+v", p)
+	}
+
+	vc := NewVoiceChanger(48000)
+	vc.SetConfig(p)
+	vc.SetEnabled(true)
+
+	sig := synthVowel(48000, 480*30, 130.0, 650.0, 1700.0)
+	out := runVCFrames(t, vc, sig)
+	if len(out) != len(sig) {
+		t.Fatalf("unexpected output length: got %d want %d", len(out), len(sig))
+	}
+}
+
 func BenchmarkVoiceChanger10msFrame(b *testing.B) {
 	vc := NewVoiceChanger(48000)
 	vc.SetConfig(PresetFemaleNatural.VoiceChangerParams)
