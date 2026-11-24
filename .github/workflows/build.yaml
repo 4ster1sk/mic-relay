@@ -1,0 +1,156 @@
+name: Build & Release Mic Relay
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Fyne build headers for vet/test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+
+      - name: Run go vet & tests
+        run: |
+          go vet ./...
+          go test -v -race ./...
+
+  build-linux-deb:
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.24-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Debian 12 build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git gcc pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev dpkg-dev ca-certificates
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.1.0+git.$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build Linux amd64 binary (Debian 12 glibc 2.36 compatible)
+        env:
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/mic-relay ./cmd/mic-relay
+
+      - name: Build Debian 12+ .deb package
+        run: |
+          chmod +x ./packaging/deb/build-deb.sh
+          ./packaging/deb/build-deb.sh "${{ steps.ver.outputs.version }}" dist/mic-relay dist/
+          dpkg-deb --info dist/mic-relay_*_amd64.deb
+
+      - name: Upload Linux .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mic-relay-linux-deb
+          path: dist/mic-relay_*_amd64.deb
+
+  build-windows-exe:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Build Windows amd64 .exe
+        env:
+          CGO_ENABLED: 1
+          GOOS: windows
+          GOARCH: amd64
+          CC: x86_64-w64-mingw32-gcc
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o dist/mic-relay.exe ./cmd/mic-relay
+
+      - name: Upload Windows .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mic-relay-windows-exe
+          path: dist/mic-relay.exe
+
+  release:
+    needs: [build-linux-deb, build-windows-exe]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: mic-relay-linux-deb
+          path: release-assets
+
+      - name: Download Windows .exe
+        uses: actions/download-artifact@v4
+        with:
+          name: mic-relay-windows-exe
+          path: release-assets
+
+      - name: Create GitHub Release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release-assets/* --repo "${REPO}" --clobber
+          else
+            gh release create "${TAG}" release-assets/* \
+              --repo "${REPO}" \
+              --title "Mic Relay ${TAG}" \
+              --notes "Linux (Debian 12+ .deb) および Windows (.exe) ビルド"
+          fi
