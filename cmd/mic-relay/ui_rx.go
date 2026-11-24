@@ -35,7 +35,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 	ra.rxDBLabel = widget.NewLabel("-60.0 dB")
 
 	ra.rxVolLabel = widget.NewLabel(fmt.Sprintf("%.0f%%", ra.cfg.RX.OutputVolumePercent))
-	volSlider := widget.NewSlider(0, 200)
+	volSlider := uiutil.NewSlider(0, 200)
 	volSlider.Step = 5
 	volSlider.Value = ra.cfg.RX.OutputVolumePercent
 	volSlider.OnChanged = func(v float64) {
@@ -86,7 +86,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 	ra.rxNameEntry.SetText(ra.cfg.RX.DisplayName)
 
 	ra.rxBufLabel = widget.NewLabel(fmt.Sprintf("%d ms", ra.cfg.RX.TargetBufferMs))
-	ra.rxBufSlider = widget.NewSlider(10, 150)
+	ra.rxBufSlider = uiutil.NewSlider(10, 150)
 	ra.rxBufSlider.Step = 5
 	ra.rxBufSlider.Value = float64(ra.cfg.RX.TargetBufferMs)
 	ra.rxBufSlider.OnChanged = func(v float64) {

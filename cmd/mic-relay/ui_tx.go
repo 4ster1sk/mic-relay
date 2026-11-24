@@ -88,7 +88,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	ra.txVADLabel = widget.NewLabel("RNNoise: ON")
 
 	ra.txGainLabel = widget.NewLabel(fmt.Sprintf("%+.1f dB", ra.cfg.TX.GainDB))
-	gainSlider := widget.NewSlider(-24, 24)
+	gainSlider := uiutil.NewSlider(-24, 24)
 	gainSlider.Step = 0.5
 	gainSlider.Value = ra.cfg.TX.GainDB
 	gainSlider.OnChanged = func(v float64) {
@@ -116,7 +116,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	}
 
 	ra.txGateLabel = widget.NewLabel(fmt.Sprintf("%.0f dB", ra.cfg.TX.GateThresholdDB))
-	gateSlider := widget.NewSlider(-60, -10)
+	gateSlider := uiutil.NewSlider(-60, -10)
 	gateSlider.Step = 1
 	gateSlider.Value = ra.cfg.TX.GateThresholdDB
 	gateSlider.OnChanged = func(v float64) {

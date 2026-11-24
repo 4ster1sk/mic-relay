@@ -111,7 +111,7 @@ type RelayApp struct {
 	rxMuteBtn         *widget.Button
 	rxPortEntry       *widget.Entry
 	rxNameEntry       *widget.Entry
-	rxBufSlider       *widget.Slider
+	rxBufSlider       *uiutil.Slider
 	rxBufLabel        *widget.Label
 	rxDiagSource      *widget.Label
 	rxDiagCodec       *widget.Label
@@ -205,12 +205,30 @@ func (ra *RelayApp) handlePTTKeyUp(ev *fyne.KeyEvent) {
 }
 
 func (ra *RelayApp) setupPTTKeyHandler() {
-	if ra.win == nil || ra.win.Canvas() == nil {
-		return
+	if ra.win != nil && ra.win.Canvas() != nil {
+		if dc, ok := ra.win.Canvas().(desktop.Canvas); ok {
+			dc.SetOnKeyDown(ra.handlePTTKeyDown)
+			dc.SetOnKeyUp(ra.handlePTTKeyUp)
+		}
 	}
-	if dc, ok := ra.win.Canvas().(desktop.Canvas); ok {
-		dc.SetOnKeyDown(ra.handlePTTKeyDown)
-		dc.SetOnKeyUp(ra.handlePTTKeyUp)
+	if ra.fyneApp != nil && ra.fyneApp.Lifecycle() != nil {
+		ra.fyneApp.Lifecycle().SetOnExitedForeground(func() {
+			ra.releasePTTHold()
+		})
+	}
+}
+
+func (ra *RelayApp) releasePTTHold() {
+	if ra.txPTTBtn != nil {
+		ra.txPTTBtn.Release()
+	}
+	ra.txMuteMu.Lock()
+	changed := ra.pttKeyHeld || ra.pttMouseHeld
+	ra.pttKeyHeld = false
+	ra.pttMouseHeld = false
+	ra.txMuteMu.Unlock()
+	if changed {
+		ra.updateTXEffectiveMute()
 	}
 }
 
@@ -428,11 +446,7 @@ func (ra *RelayApp) setupTrayAndClose() {
 
 		if minToTray && ra.tray != nil {
 			// Release any held PTT key/mouse before hiding window
-			ra.txMuteMu.Lock()
-			ra.pttKeyHeld = false
-			ra.pttMouseHeld = false
-			ra.txMuteMu.Unlock()
-			ra.updateTXEffectiveMute()
+			ra.releasePTTHold()
 			ra.win.Hide()
 			return
 		}

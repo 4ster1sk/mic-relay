@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"mic-relay/internal/dsp"
+	"mic-relay/internal/uiutil"
 )
 
 // monitorRing is a tiny thread-safe ring buffer used for low-latency local voice preview.
@@ -123,7 +124,7 @@ func (ra *RelayApp) setLocalMonitorEnabled(on bool) error {
 	return nil
 }
 
-func vcSliderRow(title string, valLabel *widget.Label, slider *widget.Slider) fyne.CanvasObject {
+func vcSliderRow(title string, valLabel *widget.Label, slider *uiutil.Slider) fyne.CanvasObject {
 	lbl := widget.NewLabel(title)
 	valLabel.Alignment = fyne.TextAlignTrailing
 	leftWrap := container.NewGridWrap(fyne.NewSize(172, 28), lbl)
@@ -149,41 +150,41 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 
 	// --- Core Pitch & Formant ---
 	pitchVal := widget.NewLabel(fmt.Sprintf("%+.1f 半音", vcCfg.PitchSemitones))
-	pitchSlider := widget.NewSlider(-12, 16)
+	pitchSlider := uiutil.NewSlider(-12, 16)
 	pitchSlider.Step = 0.5
 	pitchSlider.Value = vcCfg.PitchSemitones
 
 	formantVal := widget.NewLabel(fmt.Sprintf("%.2fx", vcCfg.FormantRatio))
-	formantSlider := widget.NewSlider(0.75, 1.45)
+	formantSlider := uiutil.NewSlider(0.75, 1.45)
 	formantSlider.Step = 0.01
 	formantSlider.Value = vcCfg.FormantRatio
 
 	// --- Independent F1 / F2 Female Formant Shaping ---
 	throatPct := math.Round((vcCfg.ThroatFormant - 1.0) * 100)
 	throatVal := widget.NewLabel(fmt.Sprintf("%+.0f%%", throatPct))
-	throatSlider := widget.NewSlider(-20, 30)
+	throatSlider := uiutil.NewSlider(-20, 30)
 	throatSlider.Step = 1
 	throatSlider.Value = throatPct
 
 	brightPct := math.Round((vcCfg.BrightFormant - 1.0) * 100)
 	brightVal := widget.NewLabel(fmt.Sprintf("%+.0f%%", brightPct))
-	brightSlider := widget.NewSlider(-20, 30)
+	brightSlider := uiutil.NewSlider(-20, 30)
 	brightSlider.Step = 1
 	brightSlider.Value = brightPct
 
 	// --- Voice Quality: Breathiness, Softness, De-Esser, Variable HPF ---
 	breathVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Breathiness*100))
-	breathSlider := widget.NewSlider(0, 100)
+	breathSlider := uiutil.NewSlider(0, 100)
 	breathSlider.Step = 2
 	breathSlider.Value = vcCfg.Breathiness * 100
 
 	softVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Softness*100))
-	softSlider := widget.NewSlider(0, 100)
+	softSlider := uiutil.NewSlider(0, 100)
 	softSlider.Step = 2
 	softSlider.Value = vcCfg.Softness * 100
 
 	deEssVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.DeEsser*100))
-	deEssSlider := widget.NewSlider(0, 100)
+	deEssSlider := uiutil.NewSlider(0, 100)
 	deEssSlider.Step = 2
 	deEssSlider.Value = vcCfg.DeEsser * 100
 
@@ -192,7 +193,7 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 
 	hpHzVal := widget.NewLabel(fmt.Sprintf("%.0f Hz", vcCfg.HighPassHz))
 	hpHzVal.Alignment = fyne.TextAlignTrailing
-	hpHzSlider := widget.NewSlider(80, 280)
+	hpHzSlider := uiutil.NewSlider(80, 280)
 	hpHzSlider.Step = 5
 	hpHzSlider.Value = vcCfg.HighPassHz
 	if !vcCfg.HighPassEnabled {
@@ -248,7 +249,7 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		ra.syncMenuState()
 	}
 
-	sliders := []*widget.Slider{
+	sliders := []*uiutil.Slider{
 		pitchSlider, formantSlider,
 		throatSlider, brightSlider,
 		breathSlider, softSlider, deEssSlider, hpHzSlider,
