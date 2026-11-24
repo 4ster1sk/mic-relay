@@ -269,7 +269,7 @@ func (ra *RelayApp) uiRefreshLoop() {
 				// TX VU + VAD
 				ra.txVUMeter.SetLevels(txRMS, txPeakHold)
 				ra.txDBLabel.SetText(fmt.Sprintf("%5.1f dB", txRMS))
-				if rnOn && ra.sender.IsRunning() {
+				if rnOn && ra.capturer.IsRunning() {
 					if vad >= 0.5 {
 						ra.txVADLabel.SetText("VAD: 発話中")
 					} else {
@@ -329,6 +329,7 @@ func (ra *RelayApp) shutdown() {
 		ra.shuttingDown.Store(true)
 		close(ra.stopTicker)
 		ra.stopTX()
+		ra.capturer.Stop()
 		ra.stopRX()
 		ra.saveConfig()
 	})

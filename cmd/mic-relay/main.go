@@ -63,7 +63,7 @@ func main() {
 		osLabel = "Windows / VB-Cable"
 	}
 	w := a.NewWindow(fmt.Sprintf("Mic Relay — 双方向マイク中継 (%s)", osLabel))
-	w.Resize(fyne.NewSize(610, 700))
+	w.Resize(fyne.NewSize(700, 820))
 	w.SetIcon(uiutil.AppIcon())
 
 	ra := &RelayApp{
@@ -87,6 +87,13 @@ func main() {
 
 	ra.buildUI()
 	ra.setupTrayAndClose()
+
+	// Start live microphone monitoring so the input VU meter updates in real time even before TX starts
+	go func() {
+		if err := ra.startMicMonitor(); err != nil {
+			log.Printf("initial mic monitor warning: %v", err)
+		}
+	}()
 
 	// Start periodic UI refresh (20Hz for smooth VU meters & live stats)
 	go ra.uiRefreshLoop()

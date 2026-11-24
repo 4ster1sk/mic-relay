@@ -76,7 +76,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 		container.NewBorder(nil, nil, widget.NewLabel("出力音量"), container.NewHBox(ra.rxVolLabel, ra.rxMuteBtn), volSlider),
 	)
 
-	outCard := widget.NewCard("1. 仮想マイク出力先 (Windows: VB-Cable / Linux: PipeWire)", "", container.NewVBox(outItems...))
+	outCard := widget.NewCard("1. 仮想マイク出力先", "", container.NewVBox(outItems...))
 
 	// ---- Section 2: Listen & Buffer Settings ----
 	ra.rxPortEntry = widget.NewEntry()
@@ -135,7 +135,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 	ra.rxDiagLoss = widget.NewLabel("パケットロス: 0.00 %")
 	ra.rxDiagDrift = widget.NewLabel("クロック補正: +0.00 %")
 
-	diagCard := widget.NewCard("3. リアルタイム診断 (ジッター / クロックドリフト補正)", "", container.NewGridWithColumns(3,
+	diagCard := widget.NewCard("3. リアルタイム診断", "", container.NewGridWithColumns(3,
 		ra.rxDiagSource,
 		ra.rxDiagCodec,
 		ra.rxDiagBuf,
@@ -154,9 +154,8 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 		outCard,
 		listenCard,
 		diagCard,
-		ra.rxStartStopBtn,
 	)
-	return container.NewVScroll(content)
+	return container.NewBorder(nil, container.NewPadded(ra.rxStartStopBtn), nil, nil, container.NewVScroll(content))
 }
 
 func (ra *RelayApp) selectedRawOutputDevice() string {

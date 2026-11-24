@@ -47,14 +47,52 @@ func labelToCodecMode(l string) config.CodecMode {
 	}
 }
 
+type responsiveTableLayout struct {
+	table     *widget.Table
+	minHeight float32
+}
+
+func (l *responsiveTableLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(420, l.minHeight)
+}
+
+func (l *responsiveTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	const (
+		col0 = float32(92)
+		col3 = float32(68)
+		pad  = float32(18)
+	)
+	rem := size.Width - col0 - col3 - pad
+	if rem < 200 {
+		rem = 200
+	}
+	col1 := rem * 0.48
+	col2 := rem - col1
+	l.table.SetColumnWidth(0, col0)
+	l.table.SetColumnWidth(1, col1)
+	l.table.SetColumnWidth(2, col2)
+	l.table.SetColumnWidth(3, col3)
+	objects[0].Move(fyne.NewPos(0, 0))
+	objects[0].Resize(size)
+}
+
 func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	// ---- Section 1: Input Mic & Noise Suppression ----
 	ra.txMicSelect = widget.NewSelect(nil, func(selected string) {
 		ra.cfgMu.Lock()
+		prev := ra.cfg.TX.InputDevice
 		ra.cfg.TX.InputDevice = selected
 		ra.cfgMu.Unlock()
 		ra.saveConfig()
 		ra.updateLoopWarning()
+		if selected != "" && selected != prev && ra.capturer.IsRunning() {
+			go func() {
+				_ = ra.startMicMonitor()
+			}()
+		}
 	})
 	ra.refreshInputDevices()
 
@@ -207,7 +245,10 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		ra.txPortEntry.SetText(strconv.Itoa(chosen.Port))
 	}
 
-	tableWrap := container.NewGridWrap(fyne.NewSize(540, 128), ra.txPeerTable)
+	tableWrap := container.New(&responsiveTableLayout{
+		table:     ra.txPeerTable,
+		minHeight: 148,
+	}, ra.txPeerTable)
 
 	ra.txHostEntry = widget.NewEntry()
 	ra.txHostEntry.SetPlaceHolder("IP または Tailscale MagicDNS 名")
@@ -286,9 +327,8 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		micCard,
 		destCard,
 		optCard,
-		ra.txStartStopBtn,
 	)
-	return container.NewVScroll(content)
+	return container.NewBorder(nil, container.NewPadded(ra.txStartStopBtn), nil, nil, container.NewVScroll(content))
 }
 
 func (ra *RelayApp) refreshInputDevices() {
@@ -475,6 +515,35 @@ func (ra *RelayApp) toggleTXMute() {
 	ra.syncTrayState()
 }
 
+func (ra *RelayApp) selectedInputDeviceName() string {
+	ra.cfgMu.Lock()
+	devName := ra.cfg.TX.InputDevice
+	ra.cfgMu.Unlock()
+	if strings.HasPrefix(devName, "(") {
+		return ""
+	}
+	return devName
+}
+
+func (ra *RelayApp) onCaptureFrame(frame []float32) {
+	// 1. Optional RNNoise Noise Suppression (48kHz / 480 samples = 10ms)
+	if ra.denoiser != nil {
+		ra.denoiser.Process(frame)
+	}
+	// 2. DSP (Gain, Noise Gate, Smooth Mute, Soft Limiter, live VU meter)
+	ra.txDSP.Process(frame)
+	// 3. Encode & UDP Transmit only while actively streaming
+	if ra.sender.IsRunning() {
+		_ = ra.sender.SendFrame(frame)
+	}
+}
+
+func (ra *RelayApp) startMicMonitor() error {
+	ra.capturer.Stop()
+	devName := ra.selectedInputDeviceName()
+	return ra.capturer.Start(devName, ra.onCaptureFrame)
+}
+
 func (ra *RelayApp) toggleTXStartStop() {
 	if ra.sender.IsRunning() {
 		ra.stopTX()
@@ -494,28 +563,15 @@ func (ra *RelayApp) toggleTXStartStop() {
 	ra.cfgMu.Unlock()
 	ra.saveConfig()
 
-	if err := ra.sender.Start(host, port, mode); err != nil {
-		ra.showError("送信開始エラー", err)
-		return
+	if !ra.capturer.IsRunning() {
+		if err := ra.startMicMonitor(); err != nil {
+			ra.showError("マイクキャプチャ開始エラー", err)
+			return
+		}
 	}
 
-	devName := ra.txMicSelect.Selected
-	if strings.HasPrefix(devName, "(") {
-		devName = ""
-	}
-	err = ra.capturer.Start(devName, func(frame []float32) {
-		// 1. Optional RNNoise Noise Suppression (48kHz / 480 samples = 10ms)
-		if ra.denoiser != nil {
-			ra.denoiser.Process(frame)
-		}
-		// 2. DSP (Gain, Noise Gate, Smooth Mute, Soft Limiter, VU)
-		ra.txDSP.Process(frame)
-		// 3. Encode & UDP Transmit
-		_ = ra.sender.SendFrame(frame)
-	})
-	if err != nil {
-		ra.sender.Stop()
-		ra.showError("マイクキャプチャ開始エラー", err)
+	if err := ra.sender.Start(host, port, mode); err != nil {
+		ra.showError("送信開始エラー", err)
 		return
 	}
 
@@ -527,9 +583,10 @@ func (ra *RelayApp) toggleTXStartStop() {
 }
 
 func (ra *RelayApp) stopTX() {
-	ra.capturer.Stop()
 	ra.sender.Stop()
-	ra.txDSP.ResetLevels()
+	if !ra.capturer.IsRunning() {
+		ra.txDSP.ResetLevels()
+	}
 	if ra.txStartStopBtn != nil && !ra.shuttingDown.Load() {
 		fyne.Do(func() {
 			ra.txStartStopBtn.SetText("▶ 送信を開始")

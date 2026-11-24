@@ -135,9 +135,9 @@ func (r *vuMeterRenderer) MinSize() fyne.Size {
 
 func (r *vuMeterRenderer) Refresh() {
 	r.updateBars()
-	r.bg.Refresh()
-	r.bar.Refresh()
-	r.peak.Refresh()
+	canvas.Refresh(r.bg)
+	canvas.Refresh(r.bar)
+	canvas.Refresh(r.peak)
 }
 
 func (r *vuMeterRenderer) Objects() []fyne.CanvasObject {
