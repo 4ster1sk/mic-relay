@@ -63,7 +63,7 @@ func main() {
 		osLabel = "Windows / VB-Cable"
 	}
 	w := a.NewWindow(fmt.Sprintf("Mic Relay — 双方向マイク中継 (%s)", osLabel))
-	w.Resize(fyne.NewSize(700, 820))
+	w.Resize(fyne.NewSize(700, 710))
 	w.SetIcon(uiutil.AppIcon())
 
 	ra := &RelayApp{

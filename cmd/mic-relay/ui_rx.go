@@ -108,12 +108,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 		ra.saveConfig()
 	})
 
-	ra.rxTrayCheck = widget.NewCheck("閉じる (×) 時にシステムトレイへ最小化して送受信を継続", func(v bool) {
-		ra.setMinimizeToTray(v)
-	})
-	ra.rxTrayCheck.Checked = ra.cfg.MinimizeToTray
-
-	listenCard := widget.NewCard("2. 待受・バッファ・動作設定", "", container.NewVBox(
+	listenCard := widget.NewCard("2. 待受・バッファ設定", "", container.NewVBox(
 		container.NewGridWithColumns(2,
 			container.NewBorder(nil, nil, widget.NewLabel("待受ポート"), nil, ra.rxPortEntry),
 			container.NewBorder(nil, nil, widget.NewLabel("LAN 公開名"), nil, ra.rxNameEntry),
@@ -124,7 +119,6 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 			container.NewHBox(ra.rxBufLabel, btnLAN, btnTS),
 			ra.rxBufSlider,
 		),
-		ra.rxTrayCheck,
 	))
 
 	// ---- Section 3: Real-time Network Diagnostics ----

@@ -25,28 +25,6 @@ const (
 	codecLabelOpus48 = "Opus 48k (Tailscale)"
 )
 
-func codecModeToLabel(m config.CodecMode) string {
-	switch m {
-	case config.CodecModeOpus96:
-		return codecLabelOpus96
-	case config.CodecModeOpus48:
-		return codecLabelOpus48
-	default:
-		return codecLabelPCM
-	}
-}
-
-func labelToCodecMode(l string) config.CodecMode {
-	switch l {
-	case codecLabelOpus96:
-		return config.CodecModeOpus96
-	case codecLabelOpus48:
-		return config.CodecModeOpus48
-	default:
-		return config.CodecModePCM
-	}
-}
-
 type responsiveTableLayout struct {
 	table     *widget.Table
 	minHeight float32
@@ -284,34 +262,6 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		),
 	))
 
-	// ---- Section 3: Codec & Tray ----
-	ra.txCodecRadio = widget.NewRadioGroup([]string{
-		codecLabelPCM,
-		codecLabelOpus96,
-		codecLabelOpus48,
-	}, func(sel string) {
-		mode := labelToCodecMode(sel)
-		ra.cfgMu.Lock()
-		ra.cfg.TX.CodecMode = mode
-		ra.cfgMu.Unlock()
-		if err := ra.sender.SetCodecMode(mode); err != nil {
-			ra.showError("コーデック切替エラー", err)
-		}
-		ra.saveConfig()
-	})
-	ra.txCodecRadio.Horizontal = true
-	ra.txCodecRadio.Selected = codecModeToLabel(ra.cfg.TX.CodecMode)
-
-	ra.txTrayCheck = widget.NewCheck("閉じる (×) 時にシステムトレイへ最小化して送受信を継続", func(v bool) {
-		ra.setMinimizeToTray(v)
-	})
-	ra.txTrayCheck.Checked = ra.cfg.MinimizeToTray
-
-	optCard := widget.NewCard("3. 圧縮モード・動作設定", "", container.NewVBox(
-		ra.txCodecRadio,
-		ra.txTrayCheck,
-	))
-
 	// ---- Primary Action ----
 	ra.txStartStopBtn = widget.NewButton("▶ 送信を開始", func() {
 		ra.toggleTXStartStop()
@@ -321,7 +271,6 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	content := container.NewVBox(
 		micCard,
 		destCard,
-		optCard,
 	)
 	return container.NewBorder(nil, container.NewPadded(ra.txStartStopBtn), nil, nil, container.NewVScroll(content))
 }

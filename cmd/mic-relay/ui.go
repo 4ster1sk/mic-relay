@@ -55,6 +55,13 @@ type RelayApp struct {
 	stopOnce     sync.Once
 	shuttingDown atomic.Bool
 
+	// Top main menu bar
+	mainMenu        *fyne.MainMenu
+	menuCodecPCM    *fyne.MenuItem
+	menuCodecOpus96 *fyne.MenuItem
+	menuCodecOpus48 *fyne.MenuItem
+	menuMinToTray   *fyne.MenuItem
+
 	// Top always-visible dual status strip
 	txStripLabel *widget.Label
 	rxStripLabel *widget.Label
@@ -76,8 +83,6 @@ type RelayApp struct {
 	txHostEntry       *widget.Entry
 	txPortEntry       *widget.Entry
 	txProbeLabel      *widget.Label
-	txCodecRadio      *widget.RadioGroup
-	txTrayCheck       *widget.Check
 	txStartStopBtn    *widget.Button
 
 	// RX tab widgets
@@ -92,7 +97,6 @@ type RelayApp struct {
 	rxNameEntry       *widget.Entry
 	rxBufSlider       *widget.Slider
 	rxBufLabel        *widget.Label
-	rxTrayCheck       *widget.Check
 	rxDiagSource      *widget.Label
 	rxDiagCodec       *widget.Label
 	rxDiagBuf         *widget.Label
@@ -136,6 +140,72 @@ func (ra *RelayApp) buildUI() {
 
 	root := container.NewBorder(statusStrip, nil, nil, nil, ra.tabs)
 	ra.win.SetContent(root)
+	ra.buildMainMenu()
+}
+
+func (ra *RelayApp) buildMainMenu() {
+	ra.menuCodecPCM = fyne.NewMenuItem(codecLabelPCM, func() {
+		ra.selectCodecMode(config.CodecModePCM)
+	})
+	ra.menuCodecOpus96 = fyne.NewMenuItem(codecLabelOpus96, func() {
+		ra.selectCodecMode(config.CodecModeOpus96)
+	})
+	ra.menuCodecOpus48 = fyne.NewMenuItem(codecLabelOpus48, func() {
+		ra.selectCodecMode(config.CodecModeOpus48)
+	})
+	qualityMenu := fyne.NewMenu("音質",
+		ra.menuCodecPCM,
+		ra.menuCodecOpus96,
+		ra.menuCodecOpus48,
+	)
+
+	ra.menuMinToTray = fyne.NewMenuItem("閉じるでトレイに最小化", func() {
+		ra.cfgMu.Lock()
+		next := !ra.cfg.MinimizeToTray
+		ra.cfgMu.Unlock()
+		ra.setMinimizeToTray(next)
+	})
+	itemQuit := fyne.NewMenuItem("終了 (完全終了)", func() {
+		ra.shutdown()
+		ra.fyneApp.Quit()
+	})
+	itemQuit.IsQuit = true
+	settingsMenu := fyne.NewMenu("設定",
+		ra.menuMinToTray,
+		fyne.NewMenuItemSeparator(),
+		itemQuit,
+	)
+
+	ra.mainMenu = fyne.NewMainMenu(qualityMenu, settingsMenu)
+	ra.syncMenuState()
+	ra.win.SetMainMenu(ra.mainMenu)
+}
+
+func (ra *RelayApp) selectCodecMode(mode config.CodecMode) {
+	ra.cfgMu.Lock()
+	ra.cfg.TX.CodecMode = mode
+	ra.cfgMu.Unlock()
+	if err := ra.sender.SetCodecMode(mode); err != nil {
+		ra.showError("コーデック切替エラー", err)
+	}
+	ra.syncMenuState()
+	ra.saveConfig()
+}
+
+func (ra *RelayApp) syncMenuState() {
+	if ra.mainMenu == nil {
+		return
+	}
+	ra.cfgMu.Lock()
+	mode := ra.cfg.TX.CodecMode
+	minToTray := ra.cfg.MinimizeToTray
+	ra.cfgMu.Unlock()
+
+	ra.menuCodecPCM.Checked = mode == config.CodecModePCM || mode == ""
+	ra.menuCodecOpus96.Checked = mode == config.CodecModeOpus96
+	ra.menuCodecOpus48.Checked = mode == config.CodecModeOpus48
+	ra.menuMinToTray.Checked = minToTray
+	ra.mainMenu.Refresh()
 }
 
 func (ra *RelayApp) setupTrayAndClose() {
@@ -191,12 +261,7 @@ func (ra *RelayApp) setMinimizeToTray(v bool) {
 	ra.cfgMu.Lock()
 	ra.cfg.MinimizeToTray = v
 	ra.cfgMu.Unlock()
-	if ra.txTrayCheck != nil && ra.txTrayCheck.Checked != v {
-		ra.txTrayCheck.SetChecked(v)
-	}
-	if ra.rxTrayCheck != nil && ra.rxTrayCheck.Checked != v {
-		ra.rxTrayCheck.SetChecked(v)
-	}
+	ra.syncMenuState()
 	ra.saveConfig()
 }
 

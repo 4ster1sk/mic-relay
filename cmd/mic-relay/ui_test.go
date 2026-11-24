@@ -76,8 +76,25 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	ra.txVUMeter.SetLevels(rms, peakHold)
 	ra.txDBLabel.SetText("-10.0 dB")
 
-	// Render at default 700x820 and resized 920x820
-	w.Resize(fyne.NewSize(700, 820))
+	// Verify main menu codec selection and minimize-to-tray toggle
+	if ra.mainMenu == nil || len(ra.mainMenu.Items) != 2 {
+		t.Fatalf("expected 2 top-level menus (音質, 設定)")
+	}
+	ra.selectCodecMode(config.CodecModeOpus96)
+	if !ra.menuCodecOpus96.Checked || ra.menuCodecPCM.Checked {
+		t.Fatalf("expected Opus96 menu item checked after selectCodecMode")
+	}
+	ra.setMinimizeToTray(false)
+	if ra.menuMinToTray.Checked {
+		t.Fatalf("expected minimize-to-tray menu item unchecked")
+	}
+	ra.setMinimizeToTray(true)
+	if !ra.menuMinToTray.Checked {
+		t.Fatalf("expected minimize-to-tray menu item checked")
+	}
+
+	// Render at default 700x680
+	w.Resize(fyne.NewSize(700, 680))
 
 	if outDir := os.Getenv("MIC_RELAY_SCREENSHOT_DIR"); outDir != "" {
 		_ = os.MkdirAll(outDir, 0o755)
@@ -89,13 +106,10 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 				_ = f.Close()
 			}
 		}
-		saveCapture("tx_700x820.png")
-
-		w.Resize(fyne.NewSize(920, 820))
-		saveCapture("tx_920x820.png")
+		saveCapture("tx_menu_700x680.png")
 
 		ra.tabs.SelectIndex(1)
-		w.Resize(fyne.NewSize(700, 820))
-		saveCapture("rx_700x820.png")
+		w.Resize(fyne.NewSize(700, 680))
+		saveCapture("rx_menu_700x680.png")
 	}
 }
