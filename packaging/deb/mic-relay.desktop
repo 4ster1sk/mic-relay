@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mic Relay
+Comment=Linux ↔ Windows 双方向マイク中継 (VRChat / PipeWire / VB-Cable)
+Exec=/usr/bin/mic-relay
+Icon=mic-relay
+Terminal=false
+Categories=AudioVideo;Audio;Network;
+StartupNotify=true

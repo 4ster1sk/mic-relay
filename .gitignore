@@ -1,0 +1,22 @@
+# Planning / design mockups (excluded from git)
+plan/
+
+# Build artifacts
+dist/
+*.deb
+*.exe
+/mic-relay
+/mic-relay-sender
+/mic-relay-receiver
+
+# Test & coverage
+*.test
+*.out
+coverage.html
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
