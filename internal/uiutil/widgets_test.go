@@ -191,32 +191,102 @@ func TestBringWindowToFront(t *testing.T) {
 	BringWindowToFront(w)
 }
 
-func TestTrayControllerMutualExclusion(t *testing.T) {
-	tc := &TrayController{
-		itemTXMute:  fyne.NewMenuItem("txmute", nil),
-		itemRNNoise: fyne.NewMenuItem("rnnoise", nil),
-		itemVC:      fyne.NewMenuItem("vc", nil),
-		itemTXRun:   fyne.NewMenuItem("txrun", nil),
-		itemRXMute:  fyne.NewMenuItem("rxmute", nil),
-		itemRXRun:   fyne.NewMenuItem("rxrun", nil),
-	}
-	tc.menu = fyne.NewMenu("Mic Relay", tc.itemTXMute, tc.itemRNNoise, tc.itemVC, tc.itemTXRun, tc.itemRXMute, tc.itemRXRun)
+type fakeDesktopApp struct {
+	desktop.App
+	setMenuCalls int
+	lastMenu     *fyne.Menu
+}
 
-	// Idle: both enabled
+func (f *fakeDesktopApp) SetSystemTrayMenu(m *fyne.Menu) {
+	f.setMenuCalls++
+	f.lastMenu = m
+}
+
+func TestTrayControllerDynamicMenu(t *testing.T) {
+	desk := &fakeDesktopApp{}
+	tc := newTrayController(desk, TrayCallbacks{})
+
+	hasItem := func(target *fyne.MenuItem) bool {
+		for _, it := range tc.menu.Items {
+			if it == target {
+				return true
+			}
+		}
+		return false
+	}
+	assertNoConsecutiveSeparators := func(state string) {
+		prevSep := false
+		for i, it := range tc.menu.Items {
+			if it.IsSeparator && prevSep {
+				t.Fatalf("[%s] consecutive separators at index %d", state, i)
+			}
+			prevSep = it.IsSeparator
+		}
+	}
+
+	// Idle: both TX and RX items are shown and enabled
 	tc.UpdateState(false, false, true, false, false, false)
+	if desk.setMenuCalls != 1 {
+		t.Fatalf("expected 1 SetSystemTrayMenu call, got %d", desk.setMenuCalls)
+	}
+	// Duplicate state must not trigger redundant rebuild
+	tc.UpdateState(false, false, true, false, false, false)
+	if desk.setMenuCalls != 1 {
+		t.Fatalf("expected duplicate UpdateState to be deduplicated, got %d calls", desk.setMenuCalls)
+	}
+	assertNoConsecutiveSeparators("idle")
 	if tc.itemTXRun.Disabled || tc.itemRXRun.Disabled {
 		t.Fatalf("expected both TX/RX tray items enabled when idle")
 	}
+	if !hasItem(tc.itemShow) || !hasItem(tc.itemTXRun) || !hasItem(tc.itemRXRun) || !hasItem(tc.itemQuit) {
+		t.Fatalf("expected show, TX, RX, and quit items when idle")
+	}
 
-	// TX running: RX disabled, TX enabled
-	tc.UpdateState(true, false, true, false, false, false)
+	// TX running: only TX items (plus show & quit) are shown; RX items hidden
+	tc.UpdateState(true, true, false, true, false, false)
+	if desk.setMenuCalls != 2 {
+		t.Fatalf("expected 2 SetSystemTrayMenu calls, got %d", desk.setMenuCalls)
+	}
+	assertNoConsecutiveSeparators("tx-running")
 	if tc.itemTXRun.Disabled || !tc.itemRXRun.Disabled {
 		t.Fatalf("expected RX tray item disabled while TX running")
 	}
+	if !hasItem(tc.itemShow) || !hasItem(tc.itemTXMute) || !hasItem(tc.itemRNNoise) || !hasItem(tc.itemVC) || !hasItem(tc.itemTXRun) || !hasItem(tc.itemQuit) {
+		t.Fatalf("expected TX items shown while TX running")
+	}
+	if hasItem(tc.itemRXMute) || hasItem(tc.itemRXRun) {
+		t.Fatalf("expected RX items hidden while TX running")
+	}
+	if tc.itemTXMute.Label != "TX マイクミュート切替 (ミュート中)" || tc.itemRNNoise.Label != "TX ノイズ抑制 RNNoise (OFF)" || tc.itemVC.Label != "TX ボイチェン切替 (ON)" {
+		t.Fatalf("unexpected TX labels: mute=%q rn=%q vc=%q", tc.itemTXMute.Label, tc.itemRNNoise.Label, tc.itemVC.Label)
+	}
 
-	// RX running: TX disabled, RX enabled
-	tc.UpdateState(false, false, true, false, true, false)
+	// RX running: only RX items (plus show & quit) are shown; TX items hidden
+	tc.UpdateState(false, false, true, false, true, true)
+	if desk.setMenuCalls != 3 {
+		t.Fatalf("expected 3 SetSystemTrayMenu calls, got %d", desk.setMenuCalls)
+	}
+	assertNoConsecutiveSeparators("rx-running")
 	if !tc.itemTXRun.Disabled || tc.itemRXRun.Disabled {
 		t.Fatalf("expected TX tray item disabled while RX running")
+	}
+	if !hasItem(tc.itemShow) || !hasItem(tc.itemRXMute) || !hasItem(tc.itemRXRun) || !hasItem(tc.itemQuit) {
+		t.Fatalf("expected RX items shown while RX running")
+	}
+	if hasItem(tc.itemTXMute) || hasItem(tc.itemRNNoise) || hasItem(tc.itemVC) || hasItem(tc.itemTXRun) {
+		t.Fatalf("expected TX items hidden while RX running")
+	}
+	if tc.itemRXMute.Label != "RX 出力ミュート切替 (ミュート中)" || tc.itemRXRun.Label != "RX 受信待機を停止" {
+		t.Fatalf("unexpected RX labels: mute=%q run=%q", tc.itemRXMute.Label, tc.itemRXRun.Label)
+	}
+
+	// Back to idle: both TX and RX items restored
+	tc.UpdateState(false, false, true, false, false, false)
+	if desk.setMenuCalls != 4 {
+		t.Fatalf("expected 4 SetSystemTrayMenu calls, got %d", desk.setMenuCalls)
+	}
+	assertNoConsecutiveSeparators("idle-restored")
+	if !hasItem(tc.itemTXRun) || !hasItem(tc.itemRXRun) {
+		t.Fatalf("expected both TX and RX items restored when idle")
 	}
 }

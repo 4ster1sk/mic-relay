@@ -313,25 +313,27 @@ func (ra *RelayApp) updateTXEffectiveMute() {
 	effectiveMute := manualMuted || (pttOn && !talking)
 	ra.txDSP.SetMuted(effectiveMute)
 
-	if ra.txPTTBtn != nil && !ra.shuttingDown.Load() {
+	if !ra.shuttingDown.Load() {
 		fyne.Do(func() {
-			if !pttOn {
-				ra.txPTTBtn.Disable()
-				ra.txPTTBtn.SetText("押している間話す (V)")
-				ra.txPTTBtn.Importance = widget.MediumImportance
-			} else if talking {
-				ra.txPTTBtn.Enable()
-				ra.txPTTBtn.SetText("発話中... (離すとミュート)")
-				ra.txPTTBtn.Importance = widget.SuccessImportance
-			} else {
-				ra.txPTTBtn.Enable()
-				ra.txPTTBtn.SetText("押している間話す (V)")
-				ra.txPTTBtn.Importance = widget.MediumImportance
+			if ra.txPTTBtn != nil {
+				if !pttOn {
+					ra.txPTTBtn.Disable()
+					ra.txPTTBtn.SetText("押している間話す (V)")
+					ra.txPTTBtn.Importance = widget.MediumImportance
+				} else if talking {
+					ra.txPTTBtn.Enable()
+					ra.txPTTBtn.SetText("発話中... (離すとミュート)")
+					ra.txPTTBtn.Importance = widget.SuccessImportance
+				} else {
+					ra.txPTTBtn.Enable()
+					ra.txPTTBtn.SetText("押している間話す (V)")
+					ra.txPTTBtn.Importance = widget.MediumImportance
+				}
+				ra.txPTTBtn.Refresh()
 			}
-			ra.txPTTBtn.Refresh()
+			ra.syncTrayState()
 		})
 	}
-	ra.syncTrayState()
 }
 
 func (ra *RelayApp) buildMainMenu() {
