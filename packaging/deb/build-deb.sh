@@ -35,7 +35,7 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: Mic Relay Maintainers <noreply@example.com>
 Depends: libc6 (>= 2.36), libgl1, libx11-6, libxcursor1, libxrandr2, libxinerama1, libxi6, libxxf86vm1, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0
-Recommends: pipewire-bin, pipewire-pulse | pulseaudio, fonts-noto-cjk | fonts-ipafont-gothic
+Recommends: pipewire-bin, pipewire-pulse | pulseaudio, fonts-ipafont-gothic | fonts-vlgothic | fonts-droid-fallback
 Description: Bidirectional low-latency microphone relay for Linux (PipeWire) and Windows (VB-Cable / VRChat)
  Mic Relay streams microphone audio over LAN or Tailscale with optional
  Pure-Go RNNoise noise suppression, PCM/Opus codec switching, adaptive

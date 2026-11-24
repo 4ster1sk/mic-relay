@@ -1,12 +1,14 @@
 package uiutil
 
 import (
+	"bytes"
 	"image/color"
 	"os"
 	"runtime"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
+	"github.com/go-text/typesetting/font"
 )
 
 // AppTheme provides a clean dark UI palette and automatic Japanese system font resolution.
@@ -73,28 +75,26 @@ func findJapaneseFont() fyne.Resource {
 	var candidates []string
 	switch runtime.GOOS {
 	case "windows":
+		// Single-face TTF/OTF Japanese fonts only (Fyne rejects .ttc font collections)
 		candidates = []string{
-			`C:\Windows\Fonts\YuGothM.ttc`,
-			`C:\Windows\Fonts\YuGothR.ttc`,
-			`C:\Windows\Fonts\meiryo.ttc`,
-			`C:\Windows\Fonts\msgothic.ttc`,
+			`C:\Windows\Fonts\yugothm.ttf`,
+			`C:\Windows\Fonts\yugothr.ttf`,
+			`C:\Windows\Fonts\YuGothM.ttf`,
+			`C:\Windows\Fonts\YuGothR.ttf`,
+			`C:\Windows\Fonts\NotoSansJP-Regular.ttf`,
 		}
 	case "linux":
+		// Single-face TTF/OTF Japanese fonts only (Fyne rejects .ttc font collections)
 		candidates = []string{
-			"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-			"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf",
+			"/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
 			"/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
 			"/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
 			"/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
 			"/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
 			"/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf",
 			"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-		}
-	case "darwin":
-		candidates = []string{
-			"/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-			"/System/Library/Fonts/Hiragino Sans GB.ttc",
+			"/usr/share/fonts/truetype/biz-udgothic/BIZUDGothic-Regular.ttf",
 		}
 	}
 
@@ -106,10 +106,22 @@ func findJapaneseFont() fyne.Resource {
 	return nil
 }
 
+func isValidSingleFaceFont(data []byte) bool {
+	if len(data) < 12 {
+		return false
+	}
+	// Reject TrueType/OpenType font collections (.ttc / .otc) which Fyne does not support
+	if bytes.HasPrefix(data, []byte("ttcf")) {
+		return false
+	}
+	_, err := font.ParseTTF(bytes.NewReader(data))
+	return err == nil
+}
+
 func loadFontResource(path string) fyne.Resource {
 	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
+	if err != nil || !isValidSingleFaceFont(data) {
 		return nil
 	}
-	return fyne.NewStaticResource("jp-font", data)
+	return fyne.NewStaticResource("jp-font.ttf", data)
 }
