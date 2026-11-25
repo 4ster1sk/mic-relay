@@ -64,6 +64,9 @@ type RelayApp struct {
 	// Top main menu bar
 	mainMenu          *fyne.MainMenu
 	vcMenu            *fyne.Menu
+	vcPresetItems     map[string]*fyne.MenuItem
+	activeVCPresetKey string
+	vcDialogSync      func()
 	menuCodecPCM      *fyne.MenuItem
 	menuCodecOpus96   *fyne.MenuItem
 	menuCodecOpus48   *fyne.MenuItem
@@ -388,34 +391,35 @@ func (ra *RelayApp) buildMainMenu() {
 }
 
 func (ra *RelayApp) buildVCMenuItems() []*fyne.MenuItem {
+	activeKey := ra.resolveActiveVCPresetKey()
+	ra.vcPresetItems = make(map[string]*fyne.MenuItem)
+
 	items := []*fyne.MenuItem{
 		ra.menuVCEnable,
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("プリセット: 女声（ナチュラル）", func() {
-			ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
-		}),
-		fyne.NewMenuItem("プリセット: 女声（高め・カワボ）", func() {
-			ra.applyVoiceChangerPreset(dsp.PresetFemaleHigh, true)
-		}),
-		fyne.NewMenuItem("プリセット: 女声（お姉さん・ウィスパー）", func() {
-			ra.applyVoiceChangerPreset(dsp.PresetFemaleWhisper, true)
-		}),
-		fyne.NewMenuItem("プリセット: 中性・少年声", func() {
-			ra.applyVoiceChangerPreset(dsp.PresetAndrogynous, true)
-		}),
-		fyne.NewMenuItem("プリセット: 全パラメータ最大 (MAX)", func() {
-			ra.applyVoiceChangerPreset(dsp.PresetMax, true)
-		}),
+	}
+	for _, def := range builtinVCPresets {
+		d := def
+		it := fyne.NewMenuItem(d.menuLabel, func() {
+			ra.applyVoiceChangerPresetWithKey(d.key, d.preset, true)
+		})
+		it.Checked = d.key == activeKey
+		ra.vcPresetItems[d.key] = it
+		items = append(items, it)
 	}
 
 	customs := ra.customVoiceChangerPresets()
 	if len(customs) > 0 {
 		items = append(items, fyne.NewMenuItemSeparator())
 		for _, p := range customs {
+			key := customVCPresetKey(p.Name)
 			preset := configPresetToDSP(p)
-			items = append(items, fyne.NewMenuItem("カスタム: "+p.Name, func() {
-				ra.applyVoiceChangerPreset(preset, true)
-			}))
+			it := fyne.NewMenuItem("カスタム: "+p.Name, func() {
+				ra.applyVoiceChangerPresetWithKey(key, preset, true)
+			})
+			it.Checked = key == activeKey
+			ra.vcPresetItems[key] = it
+			items = append(items, it)
 		}
 	}
 
@@ -463,6 +467,10 @@ func (ra *RelayApp) syncMenuState() {
 	ra.menuVCEnable.Checked = ra.voiceChanger != nil && ra.voiceChanger.IsEnabled()
 	ra.menuVCLocalMon.Checked = ra.monitorEnabled.Load()
 	ra.menuMinToTray.Checked = minToTray
+	activePresetKey := ra.resolveActiveVCPresetKey()
+	for key, it := range ra.vcPresetItems {
+		it.Checked = key == activePresetKey
+	}
 	ra.mainMenu.Refresh()
 }
 

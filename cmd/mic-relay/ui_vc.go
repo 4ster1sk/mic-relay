@@ -72,7 +72,118 @@ func (ra *RelayApp) setVoiceChangerEnabled(on bool) {
 	ra.cfgMu.Unlock()
 	ra.syncMenuState()
 	ra.syncTrayState()
+	ra.notifyVCDialogSync()
 	ra.saveConfig()
+}
+
+func (ra *RelayApp) notifyVCDialogSync() {
+	if ra.vcDialogSync != nil {
+		ra.vcDialogSync()
+	}
+}
+
+type builtinVCPresetDef struct {
+	key         string
+	buttonLabel string
+	menuLabel   string
+	preset      dsp.VoiceChangerPreset
+}
+
+var builtinVCPresets = []builtinVCPresetDef{
+	{
+		key:         "builtin:" + dsp.PresetFemaleNatural.Name,
+		buttonLabel: "女声ナチュラル",
+		menuLabel:   "プリセット: 女声（ナチュラル）",
+		preset:      dsp.PresetFemaleNatural,
+	},
+	{
+		key:         "builtin:" + dsp.PresetFemaleHigh.Name,
+		buttonLabel: "女声高め・カワボ",
+		menuLabel:   "プリセット: 女声（高め・カワボ）",
+		preset:      dsp.PresetFemaleHigh,
+	},
+	{
+		key:         "builtin:" + dsp.PresetFemaleWhisper.Name,
+		buttonLabel: "お姉さん・ウィスパー",
+		menuLabel:   "プリセット: 女声（お姉さん・ウィスパー）",
+		preset:      dsp.PresetFemaleWhisper,
+	},
+	{
+		key:         "builtin:" + dsp.PresetAndrogynous.Name,
+		buttonLabel: "中性・少年声",
+		menuLabel:   "プリセット: 中性・少年声",
+		preset:      dsp.PresetAndrogynous,
+	},
+	{
+		key:         "builtin:" + dsp.PresetMax.Name,
+		buttonLabel: "全パラメータ最大 (MAX)",
+		menuLabel:   "プリセット: 全パラメータ最大 (MAX)",
+		preset:      dsp.PresetMax,
+	},
+}
+
+func customVCPresetKey(name string) string {
+	return "custom:" + name
+}
+
+func vcParamsEqual(a, b dsp.VoiceChangerParams) bool {
+	const eps = 1e-6
+	return a.HighPassEnabled == b.HighPassEnabled &&
+		math.Abs(a.PitchSemitones-b.PitchSemitones) < eps &&
+		math.Abs(a.FormantRatio-b.FormantRatio) < eps &&
+		math.Abs(a.ThroatFormant-b.ThroatFormant) < eps &&
+		math.Abs(a.BrightFormant-b.BrightFormant) < eps &&
+		math.Abs(a.Breathiness-b.Breathiness) < eps &&
+		math.Abs(a.Softness-b.Softness) < eps &&
+		(!a.HighPassEnabled || math.Abs(a.HighPassHz-b.HighPassHz) < eps) &&
+		math.Abs(a.DeEsser-b.DeEsser) < eps
+}
+
+func vcConfigToParams(vc config.VoiceChangerConfig) dsp.VoiceChangerParams {
+	return dsp.VoiceChangerParams{
+		PitchSemitones:  vc.PitchSemitones,
+		FormantRatio:    vc.FormantRatio,
+		ThroatFormant:   vc.ThroatFormant,
+		BrightFormant:   vc.BrightFormant,
+		Breathiness:     vc.Breathiness,
+		Softness:        vc.Softness,
+		HighPassEnabled: vc.HighPassEnabled,
+		HighPassHz:      vc.HighPassHz,
+		DeEsser:         vc.DeEsser,
+	}.Clamp()
+}
+
+func (ra *RelayApp) resolveActiveVCPresetKey() string {
+	ra.cfgMu.Lock()
+	cur := vcConfigToParams(ra.cfg.TX.VoiceChanger)
+	preferred := ra.activeVCPresetKey
+	customs := make([]config.VoiceChangerPreset, len(ra.cfg.TX.VoiceChanger.Presets))
+	copy(customs, ra.cfg.TX.VoiceChanger.Presets)
+	ra.cfgMu.Unlock()
+
+	if preferred != "" {
+		for _, def := range builtinVCPresets {
+			if def.key == preferred && vcParamsEqual(cur, def.preset.VoiceChangerParams.Clamp()) {
+				return preferred
+			}
+		}
+		for _, p := range customs {
+			if customVCPresetKey(p.Name) == preferred && vcParamsEqual(cur, configPresetToDSP(p).VoiceChangerParams) {
+				return preferred
+			}
+		}
+	}
+	for _, def := range builtinVCPresets {
+		if vcParamsEqual(cur, def.preset.VoiceChangerParams.Clamp()) {
+			return def.key
+		}
+	}
+	for _, p := range customs {
+		if vcParamsEqual(cur, configPresetToDSP(p).VoiceChangerParams) {
+			return customVCPresetKey(p.Name)
+		}
+	}
+	return ""
 }
 
 func configPresetToDSP(p config.VoiceChangerPreset) dsp.VoiceChangerPreset {
@@ -134,6 +245,9 @@ func (ra *RelayApp) saveVoiceChangerPreset(name string, params dsp.VoiceChangerP
 	if !overwritten {
 		ra.cfg.TX.VoiceChanger.Presets = append(ra.cfg.TX.VoiceChanger.Presets, entry)
 	}
+	if vcParamsEqual(vcConfigToParams(ra.cfg.TX.VoiceChanger), clamped) {
+		ra.activeVCPresetKey = customVCPresetKey(name)
+	}
 	ra.cfgMu.Unlock()
 
 	ra.saveConfig()
@@ -152,6 +266,9 @@ func (ra *RelayApp) deleteVoiceChangerPreset(name string) bool {
 			break
 		}
 	}
+	if removed && ra.activeVCPresetKey == customVCPresetKey(name) {
+		ra.activeVCPresetKey = ""
+	}
 	ra.cfgMu.Unlock()
 
 	if removed {
@@ -162,6 +279,17 @@ func (ra *RelayApp) deleteVoiceChangerPreset(name string) bool {
 }
 
 func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable bool) {
+	key := ""
+	for _, def := range builtinVCPresets {
+		if def.preset.Name == p.Name {
+			key = def.key
+			break
+		}
+	}
+	ra.applyVoiceChangerPresetWithKey(key, p, enable)
+}
+
+func (ra *RelayApp) applyVoiceChangerPresetWithKey(key string, p dsp.VoiceChangerPreset, enable bool) {
 	params := p.VoiceChangerParams.Clamp()
 	if ra.voiceChanger != nil {
 		ra.voiceChanger.SetConfig(params)
@@ -170,6 +298,7 @@ func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable boo
 		}
 	}
 	ra.cfgMu.Lock()
+	ra.activeVCPresetKey = key
 	ra.cfg.TX.VoiceChanger.PitchSemitones = params.PitchSemitones
 	ra.cfg.TX.VoiceChanger.FormantRatio = params.FormantRatio
 	ra.cfg.TX.VoiceChanger.ThroatFormant = params.ThroatFormant
@@ -185,6 +314,7 @@ func (ra *RelayApp) applyVoiceChangerPreset(p dsp.VoiceChangerPreset, enable boo
 	ra.cfgMu.Unlock()
 	ra.syncMenuState()
 	ra.syncTrayState()
+	ra.notifyVCDialogSync()
 	ra.saveConfig()
 }
 
@@ -194,6 +324,7 @@ func (ra *RelayApp) setLocalMonitorEnabled(on bool) error {
 		ra.monitorPlayer.Stop()
 		ra.monitorBuf.Clear()
 		ra.syncMenuState()
+		ra.notifyVCDialogSync()
 		return nil
 	}
 	if !ra.capturer.IsRunning() {
@@ -209,6 +340,7 @@ func (ra *RelayApp) setLocalMonitorEnabled(on bool) error {
 	}
 	ra.monitorEnabled.Store(true)
 	ra.syncMenuState()
+	ra.notifyVCDialogSync()
 	return nil
 }
 
@@ -231,9 +363,7 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 	vcCfg := ra.cfg.TX.VoiceChanger
 	ra.cfgMu.Unlock()
 
-	enableCheck := widget.NewCheck("ボイスチェンジャーを有効にする", func(on bool) {
-		ra.setVoiceChangerEnabled(on)
-	})
+	enableCheck := widget.NewCheck("ボイスチェンジャーを有効にする", nil)
 	enableCheck.Checked = vcCfg.Enabled
 
 	// --- Core Pitch & Formant ---
@@ -263,17 +393,17 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 	// --- Voice Quality: Breathiness, Softness, De-Esser, Variable HPF ---
 	breathVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Breathiness*100))
 	breathSlider := uiutil.NewSlider(0, 100)
-	breathSlider.Step = 2
+	breathSlider.Step = 1
 	breathSlider.Value = vcCfg.Breathiness * 100
 
 	softVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.Softness*100))
 	softSlider := uiutil.NewSlider(0, 100)
-	softSlider.Step = 2
+	softSlider.Step = 1
 	softSlider.Value = vcCfg.Softness * 100
 
 	deEssVal := widget.NewLabel(fmt.Sprintf("%.0f%%", vcCfg.DeEsser*100))
 	deEssSlider := uiutil.NewSlider(0, 100)
-	deEssSlider.Step = 2
+	deEssSlider.Step = 1
 	deEssSlider.Value = vcCfg.DeEsser * 100
 
 	hpCheck := widget.NewCheck("胸声カット HPF", nil)
@@ -302,12 +432,9 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 			DeEsser:         math.Round(deEssSlider.Value) / 100.0,
 		}.Clamp()
 	}
-	updateParams := func() {
-		if suppressCallbacks {
-			return
-		}
-		params := currentParams()
-
+	var syncPresetButtonsUI func()
+	var monitorCheck *widget.Check
+	updateLabels := func(params dsp.VoiceChangerParams) {
 		pitchVal.SetText(fmt.Sprintf("%+.1f 半音", params.PitchSemitones))
 		formantVal.SetText(fmt.Sprintf("%.2fx", params.FormantRatio))
 		throatVal.SetText(fmt.Sprintf("%+.0f%%", (params.ThroatFormant-1.0)*100))
@@ -322,6 +449,42 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		} else {
 			hpHzSlider.Disable()
 		}
+	}
+
+	syncWidgetsFromConfig := func() {
+		ra.cfgMu.Lock()
+		cfg := ra.cfg.TX.VoiceChanger
+		ra.cfgMu.Unlock()
+		params := vcConfigToParams(cfg)
+
+		suppressCallbacks = true
+		enableCheck.SetChecked(cfg.Enabled)
+		pitchSlider.SetValue(params.PitchSemitones)
+		formantSlider.SetValue(params.FormantRatio)
+		throatSlider.SetValue(math.Round((params.ThroatFormant - 1.0) * 100))
+		brightSlider.SetValue(math.Round((params.BrightFormant - 1.0) * 100))
+		breathSlider.SetValue(math.Round(params.Breathiness * 100))
+		softSlider.SetValue(math.Round(params.Softness * 100))
+		deEssSlider.SetValue(math.Round(params.DeEsser * 100))
+		hpCheck.SetChecked(params.HighPassEnabled)
+		hpHzSlider.SetValue(params.HighPassHz)
+		if monitorCheck != nil {
+			monitorCheck.SetChecked(ra.monitorEnabled.Load())
+		}
+		suppressCallbacks = false
+
+		updateLabels(params)
+		if syncPresetButtonsUI != nil {
+			syncPresetButtonsUI()
+		}
+	}
+
+	updateParams := func() {
+		if suppressCallbacks {
+			return
+		}
+		params := currentParams()
+		updateLabels(params)
 
 		if ra.voiceChanger != nil {
 			ra.voiceChanger.SetConfig(params)
@@ -338,6 +501,9 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		ra.cfg.TX.VoiceChanger.DeEsser = params.DeEsser
 		ra.cfgMu.Unlock()
 		ra.syncMenuState()
+		if syncPresetButtonsUI != nil {
+			syncPresetButtonsUI()
+		}
 	}
 
 	sliders := []*uiutil.Slider{
@@ -354,53 +520,73 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		ra.saveConfig()
 	}
 
-	applyPresetUI := func(p dsp.VoiceChangerPreset) {
-		ra.applyVoiceChangerPreset(p, true)
-		params := p.VoiceChangerParams.Clamp()
-		suppressCallbacks = true
-		enableCheck.SetChecked(true)
-		pitchSlider.SetValue(params.PitchSemitones)
-		formantSlider.SetValue(params.FormantRatio)
-		throatSlider.SetValue(math.Round((params.ThroatFormant - 1.0) * 100))
-		brightSlider.SetValue(math.Round((params.BrightFormant - 1.0) * 100))
-		breathSlider.SetValue(params.Breathiness * 100)
-		softSlider.SetValue(params.Softness * 100)
-		deEssSlider.SetValue(params.DeEsser * 100)
-		hpCheck.SetChecked(params.HighPassEnabled)
-		hpHzSlider.SetValue(params.HighPassHz)
-		suppressCallbacks = false
-		updateParams()
+	applyPresetUI := func(key string, p dsp.VoiceChangerPreset) {
+		ra.applyVoiceChangerPresetWithKey(key, p, true)
+		syncWidgetsFromConfig()
 	}
 
-	presetsGrid := container.NewGridWithColumns(2,
-		widget.NewButton("女声ナチュラル", func() { applyPresetUI(dsp.PresetFemaleNatural) }),
-		widget.NewButton("女声高め・カワボ", func() { applyPresetUI(dsp.PresetFemaleHigh) }),
-		widget.NewButton("お姉さん・ウィスパー", func() { applyPresetUI(dsp.PresetFemaleWhisper) }),
-		widget.NewButton("中性・少年声", func() { applyPresetUI(dsp.PresetAndrogynous) }),
-		widget.NewButton("全パラメータ最大 (MAX)", func() { applyPresetUI(dsp.PresetMax) }),
-	)
+	type presetBtnEntry struct {
+		key   string
+		label string
+		btn   *widget.Button
+	}
+	builtinBtnEntries := make([]presetBtnEntry, 0, len(builtinVCPresets))
+	builtinGridObjs := make([]fyne.CanvasObject, 0, len(builtinVCPresets))
+	for _, def := range builtinVCPresets {
+		d := def
+		btn := widget.NewButton(d.buttonLabel, func() {
+			applyPresetUI(d.key, d.preset)
+		})
+		builtinBtnEntries = append(builtinBtnEntries, presetBtnEntry{key: d.key, label: d.buttonLabel, btn: btn})
+		builtinGridObjs = append(builtinGridObjs, btn)
+	}
+	presetsGrid := container.NewGridWithColumns(2, builtinGridObjs...)
 
 	presetNameEntry := widget.NewEntry()
 	presetNameEntry.SetPlaceHolder("新しいプリセット名を入力...")
 	presetStatusLabel := widget.NewLabel("")
 	presetStatusLabel.Truncation = fyne.TextTruncateEllipsis
 	customPresetsBox := container.NewVBox()
+	var customBtnEntries []presetBtnEntry
+
+	syncPresetButtonsUI = func() {
+		activeKey := ra.resolveActiveVCPresetKey()
+		updateEntry := func(e presetBtnEntry) {
+			if e.key == activeKey {
+				e.btn.SetText("✓ " + e.label)
+				e.btn.Importance = widget.HighImportance
+			} else {
+				e.btn.SetText(e.label)
+				e.btn.Importance = widget.MediumImportance
+			}
+			e.btn.Refresh()
+		}
+		for _, e := range builtinBtnEntries {
+			updateEntry(e)
+		}
+		for _, e := range customBtnEntries {
+			updateEntry(e)
+		}
+	}
 
 	var refreshCustomPresetsUI func()
 	refreshCustomPresetsUI = func() {
 		customs := ra.customVoiceChangerPresets()
 		objs := make([]fyne.CanvasObject, 0, len(customs)+1)
+		customBtnEntries = customBtnEntries[:0]
 		if len(customs) == 0 {
 			emptyLbl := widget.NewLabel("保存済みのカスタムプリセットはありません")
 			objs = append(objs, emptyLbl)
 		} else {
 			for _, p := range customs {
 				presetCfg := p
+				key := customVCPresetKey(presetCfg.Name)
 				applyBtn := widget.NewButton(presetCfg.Name, func() {
-					applyPresetUI(configPresetToDSP(presetCfg))
+					applyPresetUI(key, configPresetToDSP(presetCfg))
 					presetNameEntry.SetText(presetCfg.Name)
 					presetStatusLabel.SetText(fmt.Sprintf("プリセット「%s」を適用しました", presetCfg.Name))
 				})
+				customBtnEntries = append(customBtnEntries, presetBtnEntry{key: key, label: presetCfg.Name, btn: applyBtn})
 				delBtn := widget.NewButton("削除", func() {
 					if ra.deleteVoiceChangerPreset(presetCfg.Name) {
 						presetStatusLabel.SetText(fmt.Sprintf("プリセット「%s」を削除しました", presetCfg.Name))
@@ -412,6 +598,7 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 		}
 		customPresetsBox.Objects = objs
 		customPresetsBox.Refresh()
+		syncPresetButtonsUI()
 	}
 	refreshCustomPresetsUI()
 
@@ -434,14 +621,25 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 
 	customPresetRow := container.NewBorder(nil, nil, nil, savePresetBtn, presetNameEntry)
 
-	var monitorCheck *widget.Check
 	monitorCheck = widget.NewCheck("ローカル試聴 (自分のスピーカー/ヘッドホンで確認)", func(on bool) {
+		if suppressCallbacks {
+			return
+		}
 		if err := ra.setLocalMonitorEnabled(on); err != nil {
+			suppressCallbacks = true
 			monitorCheck.SetChecked(false)
+			suppressCallbacks = false
 			ra.showError("ローカル試聴エラー", err)
 		}
 	})
 	monitorCheck.Checked = ra.monitorEnabled.Load()
+	enableCheck.OnChanged = func(on bool) {
+		if suppressCallbacks {
+			return
+		}
+		ra.setVoiceChangerEnabled(on)
+	}
+	ra.vcDialogSync = syncWidgetsFromConfig
 
 	hint := widget.NewLabel("※ ハウリング防止のためヘッドホン・イヤホンでの試聴を推奨します。地声が低い場合はピッチを +9〜+14 半音付近まで上げて調整してください。")
 	hint.Wrapping = fyne.TextWrapWord
@@ -486,6 +684,9 @@ func (ra *RelayApp) buildVoiceChangerContent() fyne.CanvasObject {
 func (ra *RelayApp) showVoiceChangerDialog() {
 	content := ra.buildVoiceChangerContent()
 	d := dialog.NewCustom("ボイチェン詳細調整・ローカル試聴", "閉じる", content, ra.win)
+	d.SetOnClosed(func() {
+		ra.vcDialogSync = nil
+	})
 	d.Resize(fyne.NewSize(580, 660))
 	d.Show()
 }

@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 
 	"mic-relay/internal/audio"
 	"mic-relay/internal/config"
@@ -101,10 +103,80 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if vcCfg != dsp.PresetMax.VoiceChangerParams {
 		t.Fatalf("expected max preset params applied, got %+v want %+v", vcCfg, dsp.PresetMax.VoiceChangerParams)
 	}
-	// Verify Voice Changer detail dialog builds cleanly without panic
-	if vcUI := ra.buildVoiceChangerContent(); vcUI == nil {
+	// Verify active built-in preset has checkmark in menu and others do not
+	maxKey := "builtin:" + dsp.PresetMax.Name
+	natKey := "builtin:" + dsp.PresetFemaleNatural.Name
+	if !ra.vcPresetItems[maxKey].Checked || ra.vcPresetItems[natKey].Checked {
+		t.Fatalf("expected only MAX preset checked in menu (max=%v nat=%v)",
+			ra.vcPresetItems[maxKey].Checked, ra.vcPresetItems[natKey].Checked)
+	}
+	// Verify Voice Changer detail dialog builds cleanly, odd-percentage preset button preserves checkmark,
+	// and menu-to-open-dialog synchronization updates dialog buttons.
+	vcUI := ra.buildVoiceChangerContent()
+	if vcUI == nil {
 		t.Fatalf("expected non-nil voice changer dialog content")
 	}
+	findButton := func(root fyne.CanvasObject, match func(string) bool) *widget.Button {
+		var found *widget.Button
+		var walk func(obj fyne.CanvasObject)
+		walk = func(obj fyne.CanvasObject) {
+			if found != nil || obj == nil {
+				return
+			}
+			switch v := obj.(type) {
+			case *widget.Button:
+				if match(v.Text) {
+					found = v
+				}
+			case *fyne.Container:
+				for _, child := range v.Objects {
+					walk(child)
+				}
+			case *container.Scroll:
+				walk(v.Content)
+			}
+		}
+		walk(root)
+		return found
+	}
+	// Tap 女声ナチュラル (Softness=0.55, DeEsser=0.35 — odd percentages!) inside dialog
+	natBtn := findButton(vcUI, func(s string) bool { return s == "女声ナチュラル" || s == "✓ 女声ナチュラル" })
+	if natBtn == nil {
+		t.Fatalf("expected 女声ナチュラル button in VC dialog")
+	}
+	natBtn.OnTapped()
+	if natBtn.Text != "✓ 女声ナチュラル" || !ra.vcPresetItems[natKey].Checked {
+		t.Fatalf("tapping 女声ナチュラル must preserve checkmark in dialog and menu (btn=%q menu=%v)", natBtn.Text, ra.vcPresetItems[natKey].Checked)
+	}
+	// Selecting a preset from the top menu must synchronize the open dialog's button checkmark
+	ra.applyVoiceChangerPreset(dsp.PresetFemaleHigh, true)
+	highBtn := findButton(vcUI, func(s string) bool { return s == "✓ 女声高め・カワボ" })
+	if highBtn == nil || natBtn.Text != "女声ナチュラル" {
+		t.Fatalf("menu preset selection did not sync open VC dialog (natBtn=%q highBtn=%v)", natBtn.Text, highBtn)
+	}
+	// Verify vcParamsEqual ignores HighPassHz when HighPassEnabled is false
+	hpOffA := dsp.PresetAndrogynous.VoiceChangerParams
+	hpOffB := hpOffA
+	hpOffB.HighPassHz = 200
+	if !vcParamsEqual(hpOffA, hpOffB) {
+		t.Fatalf("expected vcParamsEqual to ignore HighPassHz when HighPassEnabled is false")
+	}
+	// Duplicate params: saving a custom preset identical to a built-in checks the custom preset;
+	// deleting it falls back to the built-in preset.
+	ra.applyVoiceChangerPreset(dsp.PresetFemaleNatural, true)
+	if _, err := ra.saveVoiceChangerPreset("コピー女声", dsp.PresetFemaleNatural.VoiceChangerParams); err != nil {
+		t.Fatalf("save duplicate custom preset failed: %v", err)
+	}
+	dupKey := customVCPresetKey("コピー女声")
+	if !ra.vcPresetItems[dupKey].Checked || ra.vcPresetItems[natKey].Checked {
+		t.Fatalf("expected duplicate custom preset checked over built-in (dup=%v nat=%v)",
+			ra.vcPresetItems[dupKey].Checked, ra.vcPresetItems[natKey].Checked)
+	}
+	ra.deleteVoiceChangerPreset("コピー女声")
+	if !ra.vcPresetItems[natKey].Checked {
+		t.Fatalf("expected built-in preset checked after deleting duplicate custom preset")
+	}
+	ra.vcDialogSync = nil
 
 	// Verify custom Voice Changer preset save, overwrite, menu sync, persistence, and delete
 	if _, err := ra.saveVoiceChangerPreset("   ", dsp.PresetFemaleNatural.VoiceChangerParams); err == nil {
@@ -144,8 +216,25 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if !foundInMenu {
 		t.Fatalf("expected custom preset to appear in ボイチェン menu")
 	}
+	// Apply custom preset -> checkmark should move to custom preset and uncheck built-ins
+	customKey := customVCPresetKey("配信用ボイス")
+	ra.applyVoiceChangerPresetWithKey(customKey, configPresetToDSP(savedPresets[0]), true)
+	if !ra.vcPresetItems[customKey].Checked || ra.vcPresetItems[maxKey].Checked {
+		t.Fatalf("expected custom preset checked in menu (custom=%v max=%v)",
+			ra.vcPresetItems[customKey].Checked, ra.vcPresetItems[maxKey].Checked)
+	}
 	if vcUI := ra.buildVoiceChangerContent(); vcUI == nil {
 		t.Fatalf("expected non-nil voice changer dialog content with custom presets")
+	}
+	// Modifying params away from all presets clears all preset checkmarks
+	ra.cfgMu.Lock()
+	ra.cfg.TX.VoiceChanger.PitchSemitones = 4.0
+	ra.cfgMu.Unlock()
+	ra.syncMenuState()
+	for k, it := range ra.vcPresetItems {
+		if it.Checked {
+			t.Fatalf("expected no preset checked after manual parameter edit, but %s was checked", k)
+		}
 	}
 	if !ra.deleteVoiceChangerPreset("配信用ボイス") {
 		t.Fatalf("expected deleteVoiceChangerPreset to return true")
