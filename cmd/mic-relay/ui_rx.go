@@ -251,6 +251,9 @@ func (ra *RelayApp) toggleRXStartStop() {
 	ra.cfgMu.Unlock()
 	ra.saveConfig()
 
+	// Stop local TX virtual mic output before RX claims the virtual mic / output device
+	ra.stopLocalVirtualMicOutput()
+
 	targetDevice := ra.selectedRawOutputDevice()
 	if autoPW {
 		if err := ra.virtualMic.Start(); err != nil {
@@ -301,6 +304,15 @@ func (ra *RelayApp) stopRX() {
 	ra.virtualMic.Stop()
 	ra.rxDSP.ResetLevels()
 	if !ra.shuttingDown.Load() {
+		ra.cfgMu.Lock()
+		localOn := ra.cfg.TX.LocalVirtualMicEnabled
+		ra.cfgMu.Unlock()
+		if localOn {
+			if !ra.capturer.IsRunning() {
+				_ = ra.startMicMonitor()
+			}
+			_ = ra.startLocalVirtualMicOutput()
+		}
 		fyne.Do(func() {
 			ra.syncStartStopButtons()
 			ra.updateLoopWarning()

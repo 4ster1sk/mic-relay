@@ -130,11 +130,42 @@ func (p *Processor) SetLimiter(enabled bool) {
 	p.mu.Unlock()
 }
 
+func applySoftLimiter(v float64, limiterOn bool) float64 {
+	if limiterOn {
+		const knee = 0.85
+		absV := math.Abs(v)
+		if absV > knee {
+			excess := (absV - knee) / (1.0 - knee)
+			limited := knee + (1.0-knee)*math.Tanh(excess)
+			if v < 0 {
+				v = -limited
+			} else {
+				v = limited
+			}
+		}
+	}
+	if v > 1.0 {
+		return 1.0
+	}
+	if v < -1.0 {
+		return -1.0
+	}
+	return v
+}
+
 // Process modifies samples in-place and updates VU meter statistics.
 func (p *Processor) Process(samples []float32) {
+	p.ProcessWithPreMute(samples, nil)
+}
+
+// ProcessWithPreMute processes samples in-place (Gain -> Noise Gate -> Smooth Mute -> Soft Limiter)
+// and, when preMuteOut has the same length as samples, writes the Gain -> Noise Gate -> Soft Limiter
+// signal (before mute/PTT attenuation) into preMuteOut.
+func (p *Processor) ProcessWithPreMute(samples, preMuteOut []float32) {
 	if len(samples) == 0 {
 		return
 	}
+	writePreMute := len(preMuteOut) == len(samples)
 	p.mu.Lock()
 	gain := p.gainLinear
 	muted := p.muted
@@ -180,6 +211,10 @@ func (p *Processor) Process(samples []float32) {
 			gateEnv = 1.0
 		}
 
+		if writePreMute {
+			preMuteOut[i] = float32(applySoftLimiter(v, limiterOn))
+		}
+
 		// Smooth mute ramp
 		if muted {
 			muteEnv -= muteStep
@@ -194,25 +229,7 @@ func (p *Processor) Process(samples []float32) {
 		}
 		v *= muteEnv
 
-		// Soft limiter (transparent below 0.85, soft tanh saturation above)
-		if limiterOn {
-			const knee = 0.85
-			absV := math.Abs(v)
-			if absV > knee {
-				excess := (absV - knee) / (1.0 - knee)
-				limited := knee + (1.0-knee)*math.Tanh(excess)
-				if v < 0 {
-					v = -limited
-				} else {
-					v = limited
-				}
-			}
-		}
-		if v > 1.0 {
-			v = 1.0
-		} else if v < -1.0 {
-			v = -1.0
-		}
+		v = applySoftLimiter(v, limiterOn)
 
 		samples[i] = float32(v)
 		sumSq += v * v

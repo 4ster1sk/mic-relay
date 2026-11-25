@@ -111,6 +111,17 @@ func main() {
 	go func() {
 		if err := ra.startMicMonitor(); err != nil {
 			log.Printf("initial mic monitor warning: %v", err)
+			return
+		}
+		ra.cfgMu.Lock()
+		localOn := ra.cfg.TX.LocalVirtualMicEnabled
+		ra.cfgMu.Unlock()
+		if localOn && !ra.receiver.IsRunning() {
+			if err := ra.startLocalVirtualMicOutput(); err != nil {
+				log.Printf("initial local virtual mic warning: %v", err)
+			} else {
+				fyne.Do(func() { ra.updateLoopWarning() })
+			}
 		}
 	}()
 

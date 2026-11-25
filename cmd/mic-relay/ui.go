@@ -53,6 +53,7 @@ type RelayApp struct {
 	localOutPlayer *audio.Player
 	localOutBuf    *monitorRing
 	localOutActive atomic.Bool
+	localFrameBuf  []float32
 	virtualMic     *audio.VirtualMic
 	sender         *netrelay.Sender
 	receiver       *netrelay.Receiver

@@ -80,9 +80,32 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if rms <= dsp.MinDB+10 {
 		t.Fatalf("expected live VU level to rise above silence, got %.1f dB", rms)
 	}
-	// Verify simultaneous local virtual mic buffer receives processed audio when active
+	// Verify simultaneous local virtual mic buffer receives processed audio even when
+	// TX is stopped and Push-to-Talk is enabled (muted for remote TX)
+	ra.setPTTEnabled(true)
+	if !ra.txDSP.IsMuted() {
+		t.Fatalf("expected TX muted when PTT enabled and idle")
+	}
 	ra.localOutActive.Store(true)
-	ra.onCaptureFrame(frame)
+	// Run two frames so smooth mute ramp reaches full silence on remote TX frame
+	for i := 0; i < 2; i++ {
+		f := append([]float32(nil), frame...)
+		ra.onCaptureFrame(f)
+		if i == 1 {
+			remotePeak := float32(0)
+			for _, s := range f {
+				if s < 0 {
+					s = -s
+				}
+				if s > remotePeak {
+					remotePeak = s
+				}
+			}
+			if remotePeak > 0.001 {
+				t.Fatalf("expected remote TX frame muted by PTT, got peak=%f", remotePeak)
+			}
+		}
+	}
 	localRead := make([]float32, protocol.FrameSamples10ms)
 	ra.localOutBuf.Read(localRead)
 	localPeak := float32(0)
@@ -95,10 +118,11 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 		}
 	}
 	if localPeak < 0.05 {
-		t.Fatalf("expected local virtual mic buffer to receive audio when active, got peak=%f", localPeak)
+		t.Fatalf("expected local virtual mic buffer to receive audio regardless of PTT/TX stop, got peak=%f", localPeak)
 	}
 	ra.localOutActive.Store(false)
 	ra.localOutBuf.Clear()
+	ra.setPTTEnabled(false)
 	ra.txVUMeter.SetLevels(rms, peakHold)
 	ra.txDBLabel.SetText("-10.0 dB")
 

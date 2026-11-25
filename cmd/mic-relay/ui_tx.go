@@ -186,8 +186,23 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 				ra.txLocalOutSelect.Disable()
 			}
 		}
-		if ra.sender.IsRunning() {
-			if on {
+		if on {
+			if !ra.receiver.IsRunning() {
+				if !ra.capturer.IsRunning() {
+					if err := ra.startMicMonitor(); err != nil {
+						ra.cfgMu.Lock()
+						ra.cfg.TX.LocalVirtualMicEnabled = false
+						ra.cfgMu.Unlock()
+						suppressLocalCheck = true
+						ra.txLocalMicCheck.SetChecked(false)
+						suppressLocalCheck = false
+						if ra.txLocalOutSelect != nil {
+							ra.txLocalOutSelect.Disable()
+						}
+						ra.showError("マイクキャプチャ開始エラー", err)
+						return
+					}
+				}
 				if err := ra.startLocalVirtualMicOutput(); err != nil {
 					ra.cfgMu.Lock()
 					ra.cfg.TX.LocalVirtualMicEnabled = false
@@ -201,11 +216,11 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 					ra.showError("ローカル仮想マイク同時出力エラー", err)
 					return
 				}
-			} else {
-				ra.stopLocalVirtualMicOutput()
 			}
-			ra.updateLoopWarning()
+		} else {
+			ra.stopLocalVirtualMicOutput()
 		}
+		ra.updateLoopWarning()
 		ra.saveConfig()
 	})
 	ra.txLocalMicCheck.Checked = ra.cfg.TX.LocalVirtualMicEnabled
@@ -665,16 +680,22 @@ func (ra *RelayApp) onCaptureFrame(frame []float32) {
 		ra.voiceChanger.Process(frame)
 	}
 	// 3. DSP (Gain, Noise Gate, Smooth Mute, Soft Limiter, live VU meter)
-	ra.txDSP.Process(frame)
+	// When local virtual mic output is active, capture the pre-mute (PTT-independent)
+	// processed signal so localhost always receives audio regardless of PTT or TX state.
+	if ra.localOutActive.Load() && ra.localOutBuf != nil {
+		if len(ra.localFrameBuf) != len(frame) {
+			ra.localFrameBuf = make([]float32, len(frame))
+		}
+		ra.txDSP.ProcessWithPreMute(frame, ra.localFrameBuf)
+		ra.localOutBuf.Write(ra.localFrameBuf)
+	} else {
+		ra.txDSP.Process(frame)
+	}
 	// 4. Optional local speaker/headphone preview
 	if ra.monitorEnabled.Load() && ra.monitorBuf != nil {
 		ra.monitorBuf.Write(frame)
 	}
-	// 5. Optional simultaneous local virtual microphone output while TX is running
-	if ra.localOutActive.Load() && ra.localOutBuf != nil {
-		ra.localOutBuf.Write(frame)
-	}
-	// 6. Encode & UDP Transmit only while actively streaming
+	// 5. Encode & UDP Transmit only while actively streaming
 	if ra.sender.IsRunning() {
 		_ = ra.sender.SendFrame(frame)
 	}
@@ -721,7 +742,7 @@ func (ra *RelayApp) toggleTXStartStop() {
 		return
 	}
 
-	if localOutOn {
+	if localOutOn && !ra.localOutActive.Load() {
 		if err := ra.startLocalVirtualMicOutput(); err != nil {
 			ra.sender.Stop()
 			ra.showError("ローカル仮想マイク同時出力エラー", err)
@@ -735,7 +756,6 @@ func (ra *RelayApp) toggleTXStartStop() {
 }
 
 func (ra *RelayApp) stopTX() {
-	ra.stopLocalVirtualMicOutput()
 	ra.sender.Stop()
 	if !ra.capturer.IsRunning() {
 		ra.txDSP.ResetLevels()
