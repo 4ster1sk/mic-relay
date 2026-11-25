@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -165,7 +166,51 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		func() { ra.setPTTMouseHeld(false) },
 	)
 
-	micCard := widget.NewCard("1. 入力マイク・音声処理", "", container.NewVBox(
+	autoPipeWireLocal := runtime.GOOS == "linux" && audio.VirtualMicSupported()
+	localCheckLabel := "ローカル仮想マイクにも同時出力"
+	if autoPipeWireLocal {
+		localCheckLabel = fmt.Sprintf("ローカル仮想マイク「%s」にも同時出力", audio.PipeWireVirtualMicName)
+	}
+	var suppressLocalCheck bool
+	ra.txLocalMicCheck = widget.NewCheck(localCheckLabel, func(on bool) {
+		if suppressLocalCheck {
+			return
+		}
+		ra.cfgMu.Lock()
+		ra.cfg.TX.LocalVirtualMicEnabled = on
+		ra.cfgMu.Unlock()
+		if ra.txLocalOutSelect != nil {
+			if on {
+				ra.txLocalOutSelect.Enable()
+			} else {
+				ra.txLocalOutSelect.Disable()
+			}
+		}
+		if ra.sender.IsRunning() {
+			if on {
+				if err := ra.startLocalVirtualMicOutput(); err != nil {
+					ra.cfgMu.Lock()
+					ra.cfg.TX.LocalVirtualMicEnabled = false
+					ra.cfgMu.Unlock()
+					suppressLocalCheck = true
+					ra.txLocalMicCheck.SetChecked(false)
+					suppressLocalCheck = false
+					if ra.txLocalOutSelect != nil {
+						ra.txLocalOutSelect.Disable()
+					}
+					ra.showError("ローカル仮想マイク同時出力エラー", err)
+					return
+				}
+			} else {
+				ra.stopLocalVirtualMicOutput()
+			}
+			ra.updateLoopWarning()
+		}
+		ra.saveConfig()
+	})
+	ra.txLocalMicCheck.Checked = ra.cfg.TX.LocalVirtualMicEnabled
+
+	micCardItems := []fyne.CanvasObject{
 		container.NewBorder(nil, nil, widget.NewLabel("入力マイク"), refreshMicBtn, ra.txMicSelect),
 		ra.txLoopWarnLabel,
 		container.NewBorder(nil, nil, widget.NewLabel("入力レベル"), container.NewHBox(ra.txDBLabel, ra.txVADLabel), ra.txVUMeter),
@@ -175,7 +220,37 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 			container.NewBorder(nil, nil, ra.txGateCheck, ra.txGateLabel, gateSlider),
 		),
 		container.NewBorder(nil, nil, ra.txPTTCheck, nil, ra.txPTTBtn),
-	))
+		ra.txLocalMicCheck,
+	}
+	if !autoPipeWireLocal {
+		ra.txLocalOutSelect = widget.NewSelect(nil, func(_ string) {
+			raw := ra.selectedRawLocalOutputDevice()
+			ra.cfgMu.Lock()
+			prev := ra.cfg.TX.LocalOutputDevice
+			ra.cfg.TX.LocalOutputDevice = raw
+			ra.cfgMu.Unlock()
+			ra.saveConfig()
+			ra.updateLoopWarning()
+			if raw != prev && ra.localOutActive.Load() {
+				ra.stopLocalVirtualMicOutput()
+				if err := ra.startLocalVirtualMicOutput(); err != nil {
+					ra.showError("ローカル仮想マイク出力切替エラー", err)
+				}
+			}
+		})
+		ra.refreshLocalOutputDevices()
+		if !ra.cfg.TX.LocalVirtualMicEnabled {
+			ra.txLocalOutSelect.Disable()
+		}
+		refreshLocalOutBtn := widget.NewButton("更新", func() {
+			ra.refreshLocalOutputDevices()
+		})
+		micCardItems = append(micCardItems,
+			container.NewBorder(nil, nil, widget.NewLabel("ローカル出力先"), refreshLocalOutBtn, ra.txLocalOutSelect),
+		)
+	}
+
+	micCard := widget.NewCard("1. 入力マイク・音声処理", "", container.NewVBox(micCardItems...))
 
 	// ---- Section 2: Destination Peer Aligned Table ----
 	headers := []string{"種別", "ホスト名 / 名前", "アドレス : ポート", "RTT"}
@@ -476,6 +551,110 @@ func (ra *RelayApp) selectedInputDeviceName() string {
 	return devName
 }
 
+func (ra *RelayApp) selectedRawLocalOutputDevice() string {
+	if runtime.GOOS == "linux" && audio.VirtualMicSupported() {
+		return audio.PipeWireVirtualSinkName
+	}
+	if ra.txLocalOutSelect == nil {
+		ra.cfgMu.Lock()
+		dev := ra.cfg.TX.LocalOutputDevice
+		ra.cfgMu.Unlock()
+		return dev
+	}
+	sel := ra.txLocalOutSelect.Selected
+	if raw, ok := ra.txLocalDeviceMap[sel]; ok {
+		return raw
+	}
+	if strings.HasPrefix(sel, "(") {
+		return ""
+	}
+	return sel
+}
+
+func (ra *RelayApp) refreshLocalOutputDevices() {
+	if ra.txLocalOutSelect == nil {
+		return
+	}
+	devs, err := audio.ListPlaybackDevices()
+	ra.txLocalDeviceMap = make(map[string]string)
+	if err != nil {
+		ra.txLocalOutSelect.Options = []string{"(デフォルト出力)"}
+		ra.txLocalOutSelect.SetSelectedIndex(0)
+		return
+	}
+	opts := make([]string, 0, len(devs))
+	ra.cfgMu.Lock()
+	saved := ra.cfg.TX.LocalOutputDevice
+	ra.cfgMu.Unlock()
+
+	selectedLabel := ""
+	for _, d := range devs {
+		label := d.Name
+		if d.IsVirtual {
+			label = "[推奨] " + d.Name
+		}
+		ra.txLocalDeviceMap[label] = d.Name
+		opts = append(opts, label)
+		if saved != "" && d.Name == saved {
+			selectedLabel = label
+		}
+	}
+	if len(opts) == 0 {
+		opts = []string{"(出力デバイスなし)"}
+	}
+	ra.txLocalOutSelect.Options = opts
+	if selectedLabel != "" {
+		ra.txLocalOutSelect.SetSelected(selectedLabel)
+	} else {
+		ra.txLocalOutSelect.SetSelectedIndex(0)
+	}
+	ra.txLocalOutSelect.Refresh()
+}
+
+func (ra *RelayApp) startLocalVirtualMicOutput() error {
+	if ra.localOutActive.Load() {
+		return nil
+	}
+	if ra.localOutPlayer == nil || ra.localOutBuf == nil {
+		return fmt.Errorf("ローカル仮想マイク出力が初期化されていません")
+	}
+
+	targetDevice := ra.selectedRawLocalOutputDevice()
+	startedVirtualMic := false
+	if runtime.GOOS == "linux" && audio.VirtualMicSupported() && ra.virtualMic != nil {
+		if err := ra.virtualMic.Start(); err != nil {
+			return fmt.Errorf("PipeWire 仮想マイク作成に失敗: %w", err)
+		}
+		startedVirtualMic = true
+		targetDevice = audio.PipeWireVirtualSinkName
+	}
+
+	ra.localOutBuf.Clear()
+	if err := ra.localOutPlayer.Start(targetDevice, func(dst []float32) {
+		ra.localOutBuf.Read(dst)
+	}); err != nil {
+		if startedVirtualMic && !ra.receiver.IsRunning() {
+			ra.virtualMic.Stop()
+		}
+		return err
+	}
+	ra.localOutActive.Store(true)
+	return nil
+}
+
+func (ra *RelayApp) stopLocalVirtualMicOutput() {
+	ra.localOutActive.Store(false)
+	if ra.localOutPlayer != nil {
+		ra.localOutPlayer.Stop()
+	}
+	if ra.localOutBuf != nil {
+		ra.localOutBuf.Clear()
+	}
+	if ra.virtualMic != nil && (ra.receiver == nil || !ra.receiver.IsRunning()) {
+		ra.virtualMic.Stop()
+	}
+}
+
 func (ra *RelayApp) onCaptureFrame(frame []float32) {
 	// 1. Optional RNNoise Noise Suppression (48kHz / 480 samples = 10ms)
 	if ra.denoiser != nil {
@@ -491,7 +670,11 @@ func (ra *RelayApp) onCaptureFrame(frame []float32) {
 	if ra.monitorEnabled.Load() && ra.monitorBuf != nil {
 		ra.monitorBuf.Write(frame)
 	}
-	// 5. Encode & UDP Transmit only while actively streaming
+	// 5. Optional simultaneous local virtual microphone output while TX is running
+	if ra.localOutActive.Load() && ra.localOutBuf != nil {
+		ra.localOutBuf.Write(frame)
+	}
+	// 6. Encode & UDP Transmit only while actively streaming
 	if ra.sender.IsRunning() {
 		_ = ra.sender.SendFrame(frame)
 	}
@@ -522,6 +705,7 @@ func (ra *RelayApp) toggleTXStartStop() {
 	ra.cfg.TX.TargetHost = host
 	ra.cfg.TX.TargetPort = port
 	mode := ra.cfg.TX.CodecMode
+	localOutOn := ra.cfg.TX.LocalVirtualMicEnabled
 	ra.cfgMu.Unlock()
 	ra.saveConfig()
 
@@ -537,12 +721,21 @@ func (ra *RelayApp) toggleTXStartStop() {
 		return
 	}
 
+	if localOutOn {
+		if err := ra.startLocalVirtualMicOutput(); err != nil {
+			ra.sender.Stop()
+			ra.showError("ローカル仮想マイク同時出力エラー", err)
+			return
+		}
+	}
+
 	ra.syncStartStopButtons()
 	ra.updateLoopWarning()
 	ra.syncTrayState()
 }
 
 func (ra *RelayApp) stopTX() {
+	ra.stopLocalVirtualMicOutput()
 	ra.sender.Stop()
 	if !ra.capturer.IsRunning() {
 		ra.txDSP.ResetLevels()

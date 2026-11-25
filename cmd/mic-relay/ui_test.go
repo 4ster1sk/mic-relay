@@ -47,9 +47,11 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 		jb:            jb,
 		capturer:      audio.NewCapturer(),
 		player:        audio.NewPlayer(),
-		monitorPlayer: audio.NewPlayer(),
-		monitorBuf:    newMonitorRing(),
-		virtualMic:    audio.NewVirtualMic(),
+		monitorPlayer:  audio.NewPlayer(),
+		monitorBuf:     newMonitorRing(),
+		localOutPlayer: audio.NewPlayer(),
+		localOutBuf:    newMonitorRing(),
+		virtualMic:     audio.NewVirtualMic(),
 		sender:        netrelay.NewSender("test-inst"),
 		receiver:      netrelay.NewReceiver("test-inst", "test", jb),
 		discovery:     netrelay.NewDiscoveryResponder("test-inst", "test", 48101),
@@ -78,6 +80,25 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	if rms <= dsp.MinDB+10 {
 		t.Fatalf("expected live VU level to rise above silence, got %.1f dB", rms)
 	}
+	// Verify simultaneous local virtual mic buffer receives processed audio when active
+	ra.localOutActive.Store(true)
+	ra.onCaptureFrame(frame)
+	localRead := make([]float32, protocol.FrameSamples10ms)
+	ra.localOutBuf.Read(localRead)
+	localPeak := float32(0)
+	for _, s := range localRead {
+		if s < 0 {
+			s = -s
+		}
+		if s > localPeak {
+			localPeak = s
+		}
+	}
+	if localPeak < 0.05 {
+		t.Fatalf("expected local virtual mic buffer to receive audio when active, got peak=%f", localPeak)
+	}
+	ra.localOutActive.Store(false)
+	ra.localOutBuf.Clear()
 	ra.txVUMeter.SetLevels(rms, peakHold)
 	ra.txDBLabel.SetText("-10.0 dB")
 

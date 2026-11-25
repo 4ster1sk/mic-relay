@@ -52,17 +52,19 @@ type VoiceChangerConfig struct {
 }
 
 type TXConfig struct {
-	InputDevice      string             `json:"input_device"`
-	GainDB           float64            `json:"gain_db"`
-	NoiseSuppression bool               `json:"noise_suppression"`
-	NoiseGateEnabled bool               `json:"noise_gate_enabled"`
-	GateThresholdDB  float64            `json:"gate_threshold_db"`
-	PushToTalk       bool               `json:"push_to_talk"`
-	VoiceChanger     VoiceChangerConfig `json:"voice_changer"`
-	CodecMode        CodecMode          `json:"codec_mode"`
-	TargetHost       string             `json:"target_host"`
-	TargetPort       int                `json:"target_port"`
-	Presets          []PeerPreset       `json:"presets"`
+	InputDevice            string             `json:"input_device"`
+	GainDB                 float64            `json:"gain_db"`
+	NoiseSuppression       bool               `json:"noise_suppression"`
+	NoiseGateEnabled       bool               `json:"noise_gate_enabled"`
+	GateThresholdDB        float64            `json:"gate_threshold_db"`
+	PushToTalk             bool               `json:"push_to_talk"`
+	LocalVirtualMicEnabled bool               `json:"local_virtual_mic_enabled"`
+	LocalOutputDevice      string             `json:"local_output_device"`
+	VoiceChanger           VoiceChangerConfig `json:"voice_changer"`
+	CodecMode              CodecMode          `json:"codec_mode"`
+	TargetHost             string             `json:"target_host"`
+	TargetPort             int                `json:"target_port"`
+	Presets                []PeerPreset       `json:"presets"`
 }
 
 type RXConfig struct {

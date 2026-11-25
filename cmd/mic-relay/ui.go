@@ -50,6 +50,9 @@ type RelayApp struct {
 	monitorPlayer  *audio.Player
 	monitorBuf     *monitorRing
 	monitorEnabled atomic.Bool
+	localOutPlayer *audio.Player
+	localOutBuf    *monitorRing
+	localOutActive atomic.Bool
 	virtualMic     *audio.VirtualMic
 	sender         *netrelay.Sender
 	receiver       *netrelay.Receiver
@@ -90,6 +93,9 @@ type RelayApp struct {
 	txGateLabel       *widget.Label
 	txPTTCheck        *widget.Check
 	txPTTBtn          *uiutil.HoldButton
+	txLocalMicCheck   *widget.Check
+	txLocalOutSelect  *widget.Select
+	txLocalDeviceMap  map[string]string
 	txPeerTable       *widget.Table
 
 	// TX Mute / Push-to-Talk state
@@ -131,6 +137,7 @@ type RelayApp struct {
 
 func (ra *RelayApp) buildUI() {
 	ra.txSelectedRow = -1
+	ra.txLocalDeviceMap = make(map[string]string)
 	ra.rxDeviceMap = make(map[string]string)
 
 	// Top always-visible TX / RX status bar
@@ -565,8 +572,10 @@ func (ra *RelayApp) updateLoopWarning() {
 		txIn = ra.txMicSelect.Selected
 	}
 	rxOut := ra.selectedRawOutputDevice()
-	if audio.IsPotentialFeedbackLoop(txIn, rxOut, ra.receiver.IsRunning()) {
-		ra.txLoopWarnLabel.SetText("⚠ 警告: 受信側の仮想マイクが送信入力に選択されています（ハウリングの原因になります）")
+	localOut := ra.selectedRawLocalOutputDevice()
+	if audio.IsPotentialFeedbackLoop(txIn, rxOut, ra.receiver.IsRunning()) ||
+		audio.IsPotentialFeedbackLoop(txIn, localOut, ra.localOutActive.Load()) {
+		ra.txLoopWarnLabel.SetText("⚠ 警告: 仮想マイクが送信入力に選択されています（ハウリングの原因になります）")
 		ra.txLoopWarnLabel.Show()
 	} else {
 		ra.txLoopWarnLabel.Hide()
@@ -652,6 +661,10 @@ func (ra *RelayApp) uiRefreshLoop() {
 				if ra.monitorEnabled.Load() {
 					monTag = " [試聴]"
 				}
+				localTag := ""
+				if ra.localOutActive.Load() {
+					localTag = " [ローカル仮想マイク]"
+				}
 				ra.txMuteMu.Lock()
 				pttOn := ra.pttEnabled
 				pttTalk := ra.pttKeyHeld || ra.pttMouseHeld
@@ -670,10 +683,10 @@ func (ra *RelayApp) uiRefreshLoop() {
 					if manualMuted {
 						muteStr = " [MUTE]"
 					}
-					setLabelTextIfChanged(ra.txStripLabel, fmt.Sprintf("● TX 送信中%s%s%s%s → %s (%s %dk / RTT %.1fms)",
-						muteStr, pttTag, vcTag, monTag, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
+					setLabelTextIfChanged(ra.txStripLabel, fmt.Sprintf("● TX 送信中%s%s%s%s%s → %s (%s %dk / RTT %.1fms)",
+						muteStr, pttTag, vcTag, monTag, localTag, txStats.TargetAddr, txStats.CodecLabel, txStats.BitrateKbps, txStats.RTTMs))
 				} else {
-					setLabelTextIfChanged(ra.txStripLabel, "○ TX 停止中"+pttTag+vcTag+monTag)
+					setLabelTextIfChanged(ra.txStripLabel, "○ TX 停止中"+pttTag+vcTag+monTag+localTag)
 				}
 
 				// Top RX Status Strip
@@ -717,6 +730,7 @@ func (ra *RelayApp) shutdown() {
 		if ra.monitorPlayer != nil {
 			ra.monitorPlayer.Stop()
 		}
+		ra.stopLocalVirtualMicOutput()
 		ra.stopTX()
 		ra.capturer.Stop()
 		ra.stopRX()
