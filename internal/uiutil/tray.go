@@ -38,13 +38,17 @@ type TrayController struct {
 	itemRXMute  *fyne.MenuItem
 	itemRXRun   *fyne.MenuItem
 	itemQuit    *fyne.MenuItem
-	menu        *fyne.Menu
-	lastState   trayState
-	hasState    bool
+	menu         *fyne.Menu
+	lastState    trayState
+	hasState     bool
+	lastIconName string
 }
 
 func newTrayController(desk desktop.App, cb TrayCallbacks) *TrayController {
-	tc := &TrayController{desk: desk}
+	tc := &TrayController{
+		desk:         desk,
+		lastIconName: AppIcon().Name(),
+	}
 	tc.itemShow = fyne.NewMenuItem("ウィンドウを表示", func() {
 		if cb.OnShow != nil {
 			cb.OnShow()
@@ -135,8 +139,8 @@ func SetupTray(a fyne.App, cb TrayCallbacks) *TrayController {
 	}
 
 	tc := newTrayController(desk, cb)
-	desk.SetSystemTrayIcon(AppIcon())
 	desk.SetSystemTrayMenu(tc.menu)
+	desk.SetSystemTrayIcon(AppIcon())
 	return tc
 }
 
@@ -196,6 +200,11 @@ func (tc *TrayController) UpdateState(txRunning, txMuted, rnnoiseOn, vcOn, rxRun
 
 	tc.menu.Items = tc.buildMenuItems(txRunning, rxRunning)
 	if tc.desk != nil {
+		icon := TrayIcon(txRunning, rxRunning)
+		if icon.Name() != tc.lastIconName {
+			tc.desk.SetSystemTrayIcon(icon)
+			tc.lastIconName = icon.Name()
+		}
 		tc.desk.SetSystemTrayMenu(tc.menu)
 	}
 }

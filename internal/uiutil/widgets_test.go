@@ -1,6 +1,9 @@
 package uiutil
 
 import (
+	"bytes"
+	"image/color"
+	"image/png"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -195,11 +198,45 @@ type fakeDesktopApp struct {
 	desktop.App
 	setMenuCalls int
 	lastMenu     *fyne.Menu
+	setIconCalls int
+	lastIcon     fyne.Resource
 }
 
 func (f *fakeDesktopApp) SetSystemTrayMenu(m *fyne.Menu) {
 	f.setMenuCalls++
 	f.lastMenu = m
+}
+
+func (f *fakeDesktopApp) SetSystemTrayIcon(icon fyne.Resource) {
+	f.setIconCalls++
+	f.lastIcon = icon
+}
+
+func TestTrayIconBadge(t *testing.T) {
+	decodePixel := func(res fyne.Resource, x, y int) color.NRGBA {
+		img, err := png.Decode(bytes.NewReader(res.Content()))
+		if err != nil {
+			t.Fatalf("png.Decode(%s): %v", res.Name(), err)
+		}
+		return color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+	}
+
+	idle := TrayIcon(false, false)
+	tx := TrayIcon(true, false)
+	rx := TrayIcon(false, true)
+
+	if idle.Name() != AppIcon().Name() {
+		t.Fatalf("expected idle tray icon to match AppIcon")
+	}
+	if got := decodePixel(idle, 50, 50); got.R == 0xEF || got.G == 0xC5 {
+		t.Fatalf("expected no status dot on idle icon at (50,50), got %+v", got)
+	}
+	if got := decodePixel(tx, 50, 50); got != (color.NRGBA{R: 0xEF, G: 0x44, B: 0x44, A: 0xFF}) {
+		t.Fatalf("expected red TX dot at (50,50), got %+v", got)
+	}
+	if got := decodePixel(rx, 50, 50); got != (color.NRGBA{R: 0x22, G: 0xC5, B: 0x5E, A: 0xFF}) {
+		t.Fatalf("expected green RX dot at (50,50), got %+v", got)
+	}
 }
 
 func TestTrayControllerDynamicMenu(t *testing.T) {
@@ -224,15 +261,15 @@ func TestTrayControllerDynamicMenu(t *testing.T) {
 		}
 	}
 
-	// Idle: both TX and RX items are shown and enabled
+	// Idle: both TX and RX items are shown and enabled; idle icon is already set so no redundant icon upload
 	tc.UpdateState(false, false, true, false, false, false)
-	if desk.setMenuCalls != 1 {
-		t.Fatalf("expected 1 SetSystemTrayMenu call, got %d", desk.setMenuCalls)
+	if desk.setMenuCalls != 1 || desk.setIconCalls != 0 {
+		t.Fatalf("expected 1 SetSystemTrayMenu call and 0 icon calls on initial idle, got menu=%d icon=%d", desk.setMenuCalls, desk.setIconCalls)
 	}
 	// Duplicate state must not trigger redundant rebuild
 	tc.UpdateState(false, false, true, false, false, false)
-	if desk.setMenuCalls != 1 {
-		t.Fatalf("expected duplicate UpdateState to be deduplicated, got %d calls", desk.setMenuCalls)
+	if desk.setMenuCalls != 1 || desk.setIconCalls != 0 {
+		t.Fatalf("expected duplicate UpdateState to be deduplicated, got menu=%d icon=%d", desk.setMenuCalls, desk.setIconCalls)
 	}
 	assertNoConsecutiveSeparators("idle")
 	if tc.itemTXRun.Disabled || tc.itemRXRun.Disabled {
@@ -244,8 +281,18 @@ func TestTrayControllerDynamicMenu(t *testing.T) {
 
 	// TX running: only TX items (plus show & quit) are shown; RX items hidden
 	tc.UpdateState(true, true, false, true, false, false)
-	if desk.setMenuCalls != 2 {
-		t.Fatalf("expected 2 SetSystemTrayMenu calls, got %d", desk.setMenuCalls)
+	if desk.setMenuCalls != 2 || desk.setIconCalls != 1 || desk.lastIcon.Name() != "mic-relay-icon-tx.png" {
+		t.Fatalf("expected TX icon+menu update, got menu=%d icon=%d last=%v", desk.setMenuCalls, desk.setIconCalls, desk.lastIcon)
+	}
+	// Changing mute while TX remains running updates menu without re-uploading icon
+	tc.UpdateState(true, false, false, true, false, false)
+	if desk.setMenuCalls != 3 || desk.setIconCalls != 1 {
+		t.Fatalf("expected mute toggle to update menu only, got menu=%d icon=%d", desk.setMenuCalls, desk.setIconCalls)
+	}
+	// Restore muted state for label check below
+	tc.UpdateState(true, true, false, true, false, false)
+	if desk.setMenuCalls != 4 || desk.setIconCalls != 1 {
+		t.Fatalf("expected 4 menu calls / 1 icon call, got menu=%d icon=%d", desk.setMenuCalls, desk.setIconCalls)
 	}
 	assertNoConsecutiveSeparators("tx-running")
 	if tc.itemTXRun.Disabled || !tc.itemRXRun.Disabled {
@@ -263,8 +310,8 @@ func TestTrayControllerDynamicMenu(t *testing.T) {
 
 	// RX running: only RX items (plus show & quit) are shown; TX items hidden
 	tc.UpdateState(false, false, true, false, true, true)
-	if desk.setMenuCalls != 3 {
-		t.Fatalf("expected 3 SetSystemTrayMenu calls, got %d", desk.setMenuCalls)
+	if desk.setMenuCalls != 5 || desk.setIconCalls != 2 || desk.lastIcon.Name() != "mic-relay-icon-rx.png" {
+		t.Fatalf("expected RX icon+menu update, got menu=%d icon=%d last=%v", desk.setMenuCalls, desk.setIconCalls, desk.lastIcon)
 	}
 	assertNoConsecutiveSeparators("rx-running")
 	if !tc.itemTXRun.Disabled || tc.itemRXRun.Disabled {
@@ -282,8 +329,8 @@ func TestTrayControllerDynamicMenu(t *testing.T) {
 
 	// Back to idle: both TX and RX items restored
 	tc.UpdateState(false, false, true, false, false, false)
-	if desk.setMenuCalls != 4 {
-		t.Fatalf("expected 4 SetSystemTrayMenu calls, got %d", desk.setMenuCalls)
+	if desk.setMenuCalls != 6 || desk.setIconCalls != 3 || desk.lastIcon.Name() != "mic-relay-icon.png" {
+		t.Fatalf("expected idle icon+menu update, got menu=%d icon=%d last=%v", desk.setMenuCalls, desk.setIconCalls, desk.lastIcon)
 	}
 	assertNoConsecutiveSeparators("idle-restored")
 	if !hasItem(tc.itemTXRun) || !hasItem(tc.itemRXRun) {
