@@ -272,7 +272,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		ra.deleteSelectedPreset()
 	})
 
-	destCard := widget.NewCard("2. 送信先ピア (LAN 自動検出 / Tailscale / プリセット)", "", container.NewVBox(
+	destCard := widget.NewCard("2. 送信先ピア (LAN 自動検出 / プリセット)", "", container.NewVBox(
 		container.NewBorder(nil, nil, nil, container.NewHBox(rescanBtn, delPresetBtn), ra.txProbeLabel),
 		tableWrap,
 		container.NewBorder(
@@ -344,9 +344,8 @@ func (ra *RelayApp) refreshPeers() {
 	defer cancel()
 
 	lanPeers, _ := netrelay.DiscoverLAN(ctx, ra.instanceID, protocol.DefaultDiscoveryPort, 1200*time.Millisecond)
-	tsPeers := netrelay.DiscoverTailscalePeers(ctx, protocol.DefaultAudioPort)
 
-	rows := make([]peerRow, 0, len(lanPeers)+len(tsPeers)+4)
+	rows := make([]peerRow, 0, len(lanPeers)+4)
 	for _, p := range lanPeers {
 		rtt := "--"
 		if _, ms, err := netrelay.ProbePeer(ctx, ra.instanceID, p.Host, p.Port, 500*time.Millisecond); err == nil {
@@ -358,15 +357,6 @@ func (ra *RelayApp) refreshPeers() {
 			Host:        p.Host,
 			Port:        p.Port,
 			RTTText:     rtt,
-		})
-	}
-	for _, p := range tsPeers {
-		rows = append(rows, peerRow{
-			Kind:        formatPeerKind("Tailscale", p.OS),
-			DisplayName: p.DisplayName,
-			Host:        p.Host,
-			Port:        p.Port,
-			RTTText:     "--",
 		})
 	}
 
@@ -396,7 +386,7 @@ func (ra *RelayApp) refreshPeers() {
 			ra.txPeerTable.Refresh()
 		}
 		if ra.txProbeLabel != nil {
-			ra.txProbeLabel.SetText(fmt.Sprintf("検出: LAN %d / Tailscale %d / Preset %d", len(lanPeers), len(tsPeers), len(presets)))
+			ra.txProbeLabel.SetText(fmt.Sprintf("検出: LAN %d / Preset %d", len(lanPeers), len(presets)))
 		}
 	})
 }
