@@ -81,9 +81,25 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 	ra.txVUMeter.SetLevels(rms, peakHold)
 	ra.txDBLabel.SetText("-10.0 dB")
 
-	// Verify main menu codec selection, voice changer presets, and minimize-to-tray toggle
+	// Verify main menu order (設定 first so Fyne does not inject a Quit item into 音質),
+	// codec selection, voice changer presets, and minimize-to-tray toggle
 	if ra.mainMenu == nil || len(ra.mainMenu.Items) != 3 {
-		t.Fatalf("expected 3 top-level menus (音質, ボイチェン, 設定)")
+		t.Fatalf("expected 3 top-level menus (設定, 音質, ボイチェン)")
+	}
+	if ra.mainMenu.Items[0].Label != "設定" || ra.mainMenu.Items[1].Label != "音質" || ra.mainMenu.Items[2].Label != "ボイチェン" {
+		t.Fatalf("unexpected menu order: %q, %q, %q",
+			ra.mainMenu.Items[0].Label, ra.mainMenu.Items[1].Label, ra.mainMenu.Items[2].Label)
+	}
+	settingsItems := ra.mainMenu.Items[0].Items
+	if len(settingsItems) == 0 || !settingsItems[len(settingsItems)-1].IsQuit || settingsItems[len(settingsItems)-1].Action == nil {
+		t.Fatalf("expected 設定 menu to end with IsQuit item with non-nil Action so Fyne does not inject Quit elsewhere")
+	}
+	for _, m := range ra.mainMenu.Items[1:] {
+		for _, it := range m.Items {
+			if it.IsQuit {
+				t.Fatalf("menu %q must not contain a Quit item", m.Label)
+			}
+		}
 	}
 	ra.selectCodecMode(config.CodecModeOpus96)
 	if !ra.menuCodecOpus96.Checked || ra.menuCodecPCM.Checked {

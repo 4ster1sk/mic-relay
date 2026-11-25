@@ -385,7 +385,9 @@ func (ra *RelayApp) buildMainMenu() {
 		itemQuit,
 	)
 
-	ra.mainMenu = fyne.NewMainMenu(qualityMenu, ra.vcMenu, settingsMenu)
+	// Place settingsMenu first because Fyne's desktop driver automatically appends
+	// a Quit item to mainMenu.Items[0] unless its last item has IsQuit == true.
+	ra.mainMenu = fyne.NewMainMenu(settingsMenu, qualityMenu, ra.vcMenu)
 	ra.syncMenuState()
 	ra.win.SetMainMenu(ra.mainMenu)
 }
