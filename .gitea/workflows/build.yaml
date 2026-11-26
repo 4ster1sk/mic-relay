@@ -61,7 +61,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            VERSION="0.1.0+git.$(git rev-parse --short HEAD)"
+            VERSION="0.1.1+git.$(git rev-parse --short HEAD)"
           fi
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
@@ -72,7 +72,7 @@ jobs:
           GOARCH: amd64
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o dist/mic-relay ./cmd/mic-relay
+          go build -trimpath -ldflags="-s -w -X main.appVersion=${{ steps.ver.outputs.version }}" -o dist/mic-relay ./cmd/mic-relay
 
       - name: Build Debian 12+ .deb package
         run: |
@@ -105,6 +105,16 @@ jobs:
           sudo apt-get -o APT::Sandbox::User=root update
           sudo apt-get -o APT::Sandbox::User=root install -y gcc-mingw-w64-x86-64
 
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.1.1+git.$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
       - name: Build Windows amd64 .exe
         env:
           CGO_ENABLED: 1
@@ -113,7 +123,7 @@ jobs:
           CC: x86_64-w64-mingw32-gcc
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w -H=windowsgui" -o dist/mic-relay.exe ./cmd/mic-relay
+          go build -trimpath -ldflags="-s -w -H=windowsgui -X main.appVersion=${{ steps.ver.outputs.version }}" -o dist/mic-relay.exe ./cmd/mic-relay
 
       - name: Upload Windows .exe artifact
         uses: actions/upload-artifact@v3

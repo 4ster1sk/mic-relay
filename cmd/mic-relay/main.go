@@ -3,8 +3,12 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"runtime"
 	"time"
 
@@ -20,6 +24,35 @@ import (
 	"mic-relay/internal/uiutil"
 )
 
+var appVersion = "0.1.1"
+
+type cliOptions struct {
+	minimized   bool
+	startTX     bool
+	startRX     bool
+	showVersion bool
+}
+
+func parseCLIOptions(args []string, errOut io.Writer) (cliOptions, error) {
+	var opts cliOptions
+	fs := flag.NewFlagSet("mic-relay", flag.ContinueOnError)
+	if errOut != nil {
+		fs.SetOutput(errOut)
+	}
+	fs.BoolVar(&opts.minimized, "minimized", false, "起動時にウィンドウを表示せずシステムトレイに最小化して起動する")
+	fs.BoolVar(&opts.startTX, "tx", false, "起動時に送信 (TX) を自動で開始する (-rx と同時指定不可)")
+	fs.BoolVar(&opts.startRX, "rx", false, "起動時に受信待機 (RX) を自動で開始する (-tx と同時指定不可)")
+	fs.BoolVar(&opts.showVersion, "version", false, "バージョンを表示して終了する")
+
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if opts.startTX && opts.startRX {
+		return opts, fmt.Errorf("-tx と -rx は同時に指定できません")
+	}
+	return opts, nil
+}
+
 func generateInstanceID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
@@ -29,6 +62,19 @@ func generateInstanceID() string {
 }
 
 func main() {
+	opts, err := parseCLIOptions(os.Args[1:], os.Stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "mic-relay: %v\n", err)
+		os.Exit(2)
+	}
+	if opts.showVersion {
+		fmt.Printf("mic-relay %s\n", appVersion)
+		return
+	}
+
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
 		cfgPath = "mic-relay-config.json"
@@ -105,25 +151,12 @@ func main() {
 	}
 
 	ra.buildUI()
+	ra.applyStartupTab(opts)
 	ra.setupTrayAndClose()
 
-	// Start live microphone monitoring so the input VU meter updates in real time even before TX starts
-	go func() {
-		if err := ra.startMicMonitor(); err != nil {
-			log.Printf("initial mic monitor warning: %v", err)
-			return
-		}
-		ra.cfgMu.Lock()
-		localOn := ra.cfg.TX.LocalVirtualMicEnabled
-		ra.cfgMu.Unlock()
-		if localOn && !ra.receiver.IsRunning() {
-			if err := ra.startLocalVirtualMicOutput(); err != nil {
-				log.Printf("initial local virtual mic warning: %v", err)
-			} else {
-				fyne.Do(func() { ra.updateLoopWarning() })
-			}
-		}
-	}()
+	// Start live microphone monitoring so the input VU meter updates in real time even before TX starts,
+	// then apply optional CLI auto-start (-tx / -rx) or local virtual mic output without racing on capturer.
+	go ra.runStartupTasks(opts)
 
 	// Start periodic UI refresh (20Hz for smooth VU meters & live stats)
 	go ra.uiRefreshLoop()
@@ -131,6 +164,15 @@ func main() {
 	// Kick off initial LAN/Tailscale discovery
 	go ra.refreshPeers()
 
-	w.ShowAndRun()
+	if opts.minimized {
+		if ra.tray != nil {
+			a.Run()
+		} else {
+			log.Printf("system tray unavailable; starting with window visible")
+			w.ShowAndRun()
+		}
+	} else {
+		w.ShowAndRun()
+	}
 	ra.shutdown()
 }

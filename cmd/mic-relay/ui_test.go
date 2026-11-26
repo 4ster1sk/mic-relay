@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"image/png"
 	"math"
 	"os"
@@ -462,5 +463,96 @@ func TestGUILayoutAndLiveVUMeter(t *testing.T) {
 			_ = f.Close()
 		}
 		vcWin.Close()
+	}
+}
+
+func TestParseCLIOptions(t *testing.T) {
+	if appVersion != "0.1.1" {
+		t.Fatalf("expected appVersion to be 0.1.1, got %q", appVersion)
+	}
+
+	var buf bytes.Buffer
+	opts, err := parseCLIOptions(nil, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error for empty args: %v", err)
+	}
+	if opts.minimized || opts.startTX || opts.startRX || opts.showVersion {
+		t.Fatalf("expected all flags false by default, got %+v", opts)
+	}
+
+	opts, err = parseCLIOptions([]string{"--minimized", "--tx"}, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error for --minimized --tx: %v", err)
+	}
+	if !opts.minimized || !opts.startTX || opts.startRX {
+		t.Fatalf("unexpected opts for --minimized --tx: %+v", opts)
+	}
+
+	opts, err = parseCLIOptions([]string{"-minimized", "-rx"}, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error for -minimized -rx: %v", err)
+	}
+	if !opts.minimized || opts.startTX || !opts.startRX {
+		t.Fatalf("unexpected opts for -minimized -rx: %+v", opts)
+	}
+
+	opts, err = parseCLIOptions([]string{"-version"}, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error for -version: %v", err)
+	}
+	if !opts.showVersion {
+		t.Fatalf("expected showVersion=true")
+	}
+
+	if _, err := parseCLIOptions([]string{"-tx", "-rx"}, &buf); err == nil {
+		t.Fatalf("expected error when both -tx and -rx are specified")
+	}
+
+	if _, err := parseCLIOptions([]string{"-unknown-flag"}, &buf); err == nil {
+		t.Fatalf("expected error for unknown flag")
+	}
+}
+
+func TestApplyStartupTab(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+
+	w := a.NewWindow("Startup Tab Test")
+	cfg := config.Default()
+	cfg.ActiveTab = "tx"
+	jb := jitter.NewBuffer(protocol.SampleRate, 30)
+
+	ra := &RelayApp{
+		fyneApp:        a,
+		win:            w,
+		cfgPath:        filepath.Join(t.TempDir(), "config.json"),
+		cfg:            cfg,
+		instanceID:     "test-startup-tab",
+		txDSP:          dsp.NewProcessor(protocol.SampleRate),
+		rxDSP:          dsp.NewProcessor(protocol.SampleRate),
+		voiceChanger:   dsp.NewVoiceChanger(protocol.SampleRate),
+		jb:             jb,
+		capturer:       audio.NewCapturer(),
+		player:         audio.NewPlayer(),
+		monitorPlayer:  audio.NewPlayer(),
+		monitorBuf:     newMonitorRing(),
+		localOutPlayer: audio.NewPlayer(),
+		localOutBuf:    newMonitorRing(),
+		virtualMic:     audio.NewVirtualMic(),
+		sender:         netrelay.NewSender("test-startup-tab"),
+		receiver:       netrelay.NewReceiver("test-startup-tab", "test", jb),
+		discovery:      netrelay.NewDiscoveryResponder("test-startup-tab", "test", 48101),
+		stopTicker:     make(chan struct{}),
+	}
+	ra.buildUI()
+
+	ra.applyStartupTab(cliOptions{startRX: true})
+	if ra.tabs.SelectedIndex() != 1 {
+		t.Fatalf("expected RX tab (index 1) selected for -rx, got %d", ra.tabs.SelectedIndex())
+	}
+
+	ra.applyStartupTab(cliOptions{startTX: true})
+	if ra.tabs.SelectedIndex() != 0 {
+		t.Fatalf("expected TX tab (index 0) selected for -tx, got %d", ra.tabs.SelectedIndex())
 	}
 }

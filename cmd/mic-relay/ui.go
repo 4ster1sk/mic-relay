@@ -592,7 +592,54 @@ func (ra *RelayApp) saveConfig() {
 	}
 }
 
+func (ra *RelayApp) applyStartupTab(opts cliOptions) {
+	if ra.tabs == nil {
+		return
+	}
+	switch {
+	case opts.startTX:
+		ra.tabs.SelectIndex(0)
+	case opts.startRX:
+		ra.tabs.SelectIndex(1)
+	}
+}
+
+func (ra *RelayApp) runStartupTasks(opts cliOptions) {
+	if err := ra.startMicMonitor(); err != nil {
+		log.Printf("initial mic monitor warning: %v", err)
+	}
+
+	switch {
+	case opts.startTX:
+		fyne.Do(func() {
+			if ra.shuttingDown.Load() {
+				return
+			}
+			ra.toggleTXStartStop()
+		})
+	case opts.startRX:
+		fyne.Do(func() {
+			if ra.shuttingDown.Load() {
+				return
+			}
+			ra.toggleRXStartStop()
+		})
+	default:
+		ra.cfgMu.Lock()
+		localOn := ra.cfg.TX.LocalVirtualMicEnabled
+		ra.cfgMu.Unlock()
+		if localOn && !ra.receiver.IsRunning() && ra.capturer.IsRunning() {
+			if err := ra.startLocalVirtualMicOutput(); err != nil {
+				log.Printf("initial local virtual mic warning: %v", err)
+			} else {
+				fyne.Do(func() { ra.updateLoopWarning() })
+			}
+		}
+	}
+}
+
 func (ra *RelayApp) showError(title string, err error) {
+	log.Printf("%s: %v", title, err)
 	dialog.ShowError(fmt.Errorf("%s: %w", title, err), ra.win)
 }
 
