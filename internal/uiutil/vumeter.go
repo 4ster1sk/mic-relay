@@ -7,6 +7,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"mic-relay/internal/dsp"
@@ -58,15 +59,15 @@ func (m *VUMeter) MinSize() fyne.Size {
 }
 
 func (m *VUMeter) CreateRenderer() fyne.WidgetRenderer {
-	bg := canvas.NewRectangle(color.NRGBA{R: 0x0F, G: 0x17, B: 0x2A, A: 0xFF})
+	bg := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
 	bg.CornerRadius = 4
-	bg.StrokeColor = color.NRGBA{R: 0x33, G: 0x41, B: 0x55, A: 0xFF}
+	bg.StrokeColor = theme.Color(theme.ColorNameSeparator)
 	bg.StrokeWidth = 1
 
 	bar := canvas.NewRectangle(color.NRGBA{R: 0x22, G: 0xC5, B: 0x5E, A: 0xFF})
 	bar.CornerRadius = 3
 
-	peak := canvas.NewRectangle(color.NRGBA{R: 0xFA, G: 0xCC, B: 0x15, A: 0xFF})
+	peak := canvas.NewRectangle(color.NRGBA{R: 0xEC, G: 0xB6, B: 0x37, A: 0xFF})
 
 	return &vuMeterRenderer{
 		meter: m,
@@ -151,7 +152,10 @@ func (r *vuMeterRenderer) MinSize() fyne.Size {
 }
 
 func (r *vuMeterRenderer) Refresh() {
+	r.bg.FillColor = theme.Color(theme.ColorNameInputBackground)
+	r.bg.StrokeColor = theme.Color(theme.ColorNameSeparator)
 	r.updateBars()
+	canvas.Refresh(r.bg)
 	canvas.Refresh(r.bar)
 	canvas.Refresh(r.peak)
 }

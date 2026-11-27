@@ -80,6 +80,9 @@ type RelayApp struct {
 	menuCodecOpus48   *fyne.MenuItem
 	menuVCEnable      *fyne.MenuItem
 	menuVCLocalMon    *fyne.MenuItem
+	menuThemeSystem   *fyne.MenuItem
+	menuThemeDark     *fyne.MenuItem
+	menuThemeLight    *fyne.MenuItem
 	menuMinToTray     *fyne.MenuItem
 
 	// Top always-visible dual status strip
@@ -380,6 +383,15 @@ func (ra *RelayApp) buildMainMenu() {
 	})
 	ra.vcMenu = fyne.NewMenu("ボイチェン", ra.buildVCMenuItems()...)
 
+	ra.menuThemeSystem = fyne.NewMenuItem("テーマ: システム設定に従う", func() {
+		ra.selectThemeMode(config.ThemeModeSystem)
+	})
+	ra.menuThemeDark = fyne.NewMenuItem("テーマ: ダーク", func() {
+		ra.selectThemeMode(config.ThemeModeDark)
+	})
+	ra.menuThemeLight = fyne.NewMenuItem("テーマ: ライト", func() {
+		ra.selectThemeMode(config.ThemeModeLight)
+	})
 	ra.menuMinToTray = fyne.NewMenuItem("閉じるでトレイに最小化", func() {
 		ra.cfgMu.Lock()
 		next := !ra.cfg.MinimizeToTray
@@ -392,6 +404,10 @@ func (ra *RelayApp) buildMainMenu() {
 	})
 	itemQuit.IsQuit = true
 	settingsMenu := fyne.NewMenu("設定",
+		ra.menuThemeSystem,
+		ra.menuThemeDark,
+		ra.menuThemeLight,
+		fyne.NewMenuItemSeparator(),
 		ra.menuMinToTray,
 		fyne.NewMenuItemSeparator(),
 		itemQuit,
@@ -466,20 +482,75 @@ func (ra *RelayApp) selectCodecMode(mode config.CodecMode) {
 	ra.saveConfig()
 }
 
+func configThemeToUI(mode config.ThemeMode) uiutil.ThemeMode {
+	switch mode {
+	case config.ThemeModeSystem:
+		return uiutil.ThemeSystem
+	case config.ThemeModeLight:
+		return uiutil.ThemeLight
+	default:
+		return uiutil.ThemeDark
+	}
+}
+
+func (ra *RelayApp) currentUIThemeMode() uiutil.ThemeMode {
+	ra.cfgMu.Lock()
+	mode := ra.cfg.Theme
+	ra.cfgMu.Unlock()
+	return configThemeToUI(mode)
+}
+
+func (ra *RelayApp) selectThemeMode(mode config.ThemeMode) {
+	switch mode {
+	case config.ThemeModeSystem, config.ThemeModeDark, config.ThemeModeLight:
+	default:
+		mode = config.ThemeModeDark
+	}
+	ra.cfgMu.Lock()
+	ra.cfg.Theme = mode
+	ra.cfgMu.Unlock()
+
+	ra.uiMu.Lock()
+	if ra.fyneApp != nil {
+		uiMode := configThemeToUI(mode)
+		if ra.winVisible.Load() {
+			ra.fyneApp.Settings().SetTheme(uiutil.NewAppThemeForMode(uiMode))
+		} else {
+			ra.fyneApp.Settings().SetTheme(uiutil.NewIdleThemeForMode(uiMode))
+		}
+	}
+	ra.syncMenuState()
+	ra.uiMu.Unlock()
+	ra.saveConfig()
+}
+
 func (ra *RelayApp) syncMenuState() {
 	if ra.mainMenu == nil {
 		return
 	}
 	ra.cfgMu.Lock()
 	mode := ra.cfg.TX.CodecMode
+	themeMode := ra.cfg.Theme
 	minToTray := ra.cfg.MinimizeToTray
 	ra.cfgMu.Unlock()
 
+	if themeMode == "" {
+		themeMode = config.ThemeModeDark
+	}
 	ra.menuCodecPCM.Checked = mode == config.CodecModePCM || mode == ""
 	ra.menuCodecOpus96.Checked = mode == config.CodecModeOpus96
 	ra.menuCodecOpus48.Checked = mode == config.CodecModeOpus48
 	ra.menuVCEnable.Checked = ra.voiceChanger != nil && ra.voiceChanger.IsEnabled()
 	ra.menuVCLocalMon.Checked = ra.monitorEnabled.Load()
+	if ra.menuThemeSystem != nil {
+		ra.menuThemeSystem.Checked = themeMode == config.ThemeModeSystem
+	}
+	if ra.menuThemeDark != nil {
+		ra.menuThemeDark.Checked = themeMode == config.ThemeModeDark
+	}
+	if ra.menuThemeLight != nil {
+		ra.menuThemeLight.Checked = themeMode == config.ThemeModeLight
+	}
 	ra.menuMinToTray.Checked = minToTray
 	activePresetKey := ra.resolveActiveVCPresetKey()
 	for key, it := range ra.vcPresetItems {
@@ -558,7 +629,7 @@ func (ra *RelayApp) ensureWindowAndShow(resumeMic bool) {
 
 	// Safe on Windows: either len(d.windows) == 0 (first open from --minimized)
 	// or ra.win is hidden with a valid non-nil GLFW viewport (w.view() != nil).
-	ra.fyneApp.Settings().SetTheme(uiutil.NewAppTheme())
+	ra.fyneApp.Settings().SetTheme(uiutil.NewAppThemeForMode(ra.currentUIThemeMode()))
 
 	created := false
 	if ra.win == nil {
@@ -617,7 +688,7 @@ func (ra *RelayApp) parkWindowToTray() {
 
 	// Switch to idle theme to drop the ~13MB Japanese font buffer and trigger
 	// Fyne's internal painter.ClearFontCache() + cache.ResetThemeCaches().
-	ra.fyneApp.Settings().SetTheme(uiutil.NewIdleTheme())
+	ra.fyneApp.Settings().SetTheme(uiutil.NewIdleThemeForMode(ra.currentUIThemeMode()))
 	ra.uiMu.Unlock()
 
 	// Stop live mic VU monitoring while parked in tray unless actively needed.
@@ -643,6 +714,9 @@ func (ra *RelayApp) clearWidgetRefs() {
 	ra.menuCodecOpus48 = nil
 	ra.menuVCEnable = nil
 	ra.menuVCLocalMon = nil
+	ra.menuThemeSystem = nil
+	ra.menuThemeDark = nil
+	ra.menuThemeLight = nil
 	ra.menuMinToTray = nil
 
 	ra.txStripLabel = nil

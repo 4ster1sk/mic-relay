@@ -13,9 +13,17 @@ import (
 type CodecMode string
 
 const (
-	CodecModePCM      CodecMode = "pcm"
-	CodecModeOpus96   CodecMode = "opus96"
-	CodecModeOpus48   CodecMode = "opus48"
+	CodecModePCM    CodecMode = "pcm"
+	CodecModeOpus96 CodecMode = "opus96"
+	CodecModeOpus48 CodecMode = "opus48"
+)
+
+type ThemeMode string
+
+const (
+	ThemeModeSystem ThemeMode = "system"
+	ThemeModeDark   ThemeMode = "dark"
+	ThemeModeLight  ThemeMode = "light"
 )
 
 type PeerPreset struct {
@@ -77,10 +85,11 @@ type RXConfig struct {
 }
 
 type Config struct {
-	TX             TXConfig `json:"tx"`
-	RX             RXConfig `json:"rx"`
-	MinimizeToTray bool     `json:"minimize_to_tray"`
-	ActiveTab      string   `json:"active_tab"`
+	TX             TXConfig  `json:"tx"`
+	RX             RXConfig  `json:"rx"`
+	MinimizeToTray bool      `json:"minimize_to_tray"`
+	ActiveTab      string    `json:"active_tab"`
+	Theme          ThemeMode `json:"theme"`
 }
 
 func Default() Config {
@@ -124,6 +133,7 @@ func Default() Config {
 		},
 		MinimizeToTray: true,
 		ActiveTab:      defaultTab,
+		Theme:          ThemeModeDark,
 	}
 }
 
@@ -158,6 +168,11 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.TX.CodecMode == "" {
 		cfg.TX.CodecMode = CodecModePCM
+	}
+	switch cfg.Theme {
+	case ThemeModeSystem, ThemeModeDark, ThemeModeLight:
+	default:
+		cfg.Theme = ThemeModeDark
 	}
 	if cfg.TX.VoiceChanger.PitchSemitones < -12 || cfg.TX.VoiceChanger.PitchSemitones > 16 {
 		cfg.TX.VoiceChanger.PitchSemitones = 7.5

@@ -637,5 +637,25 @@ func TestParkWindowToTrayAndRecreate(t *testing.T) {
 		t.Fatalf("expected recreated RNNoise checkbox to reflect enabled state")
 	}
 
+	// Verify theme switching (Light / System / Dark) updates menu checkmarks and persists across park/reopen
+	ra.selectThemeMode(config.ThemeModeLight)
+	if !ra.menuThemeLight.Checked || ra.menuThemeDark.Checked || ra.menuThemeSystem.Checked {
+		t.Fatalf("expected only Light theme checked (sys=%v dark=%v light=%v)",
+			ra.menuThemeSystem.Checked, ra.menuThemeDark.Checked, ra.menuThemeLight.Checked)
+	}
+	ra.parkWindowToTray()
+	ra.ensureWindowAndShow(false)
+	if !ra.menuThemeLight.Checked || ra.cfg.Theme != config.ThemeModeLight {
+		t.Fatalf("expected Light theme preserved after park/reopen, got %q", ra.cfg.Theme)
+	}
+	ra.selectThemeMode(config.ThemeModeSystem)
+	if !ra.menuThemeSystem.Checked || ra.menuThemeDark.Checked || ra.menuThemeLight.Checked {
+		t.Fatalf("expected only System theme checked")
+	}
+	ra.selectThemeMode(config.ThemeModeDark)
+	if !ra.menuThemeDark.Checked || ra.menuThemeSystem.Checked || ra.menuThemeLight.Checked {
+		t.Fatalf("expected only Dark theme checked")
+	}
+
 	ra.shutdown()
 }

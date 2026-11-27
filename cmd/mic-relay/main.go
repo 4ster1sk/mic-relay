@@ -119,7 +119,7 @@ func main() {
 	jb := jitter.NewBuffer(protocol.SampleRate, cfg.RX.TargetBufferMs)
 
 	a := app.NewWithID("dev.antigravity.micrelay")
-	a.Settings().SetTheme(uiutil.NewIdleTheme())
+	a.Settings().SetTheme(uiutil.NewIdleThemeForMode(configThemeToUI(cfg.Theme)))
 	a.SetIcon(uiutil.AppIcon())
 
 	ra := &RelayApp{

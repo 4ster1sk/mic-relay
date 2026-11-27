@@ -43,6 +43,7 @@ func TestConfigSaveAndLoad(t *testing.T) {
 	}
 	cfg.RX.TargetBufferMs = 50
 	cfg.MinimizeToTray = true
+	cfg.Theme = ThemeModeLight
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -52,7 +53,7 @@ func TestConfigSaveAndLoad(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	if got.TX.CodecMode != CodecModeOpus96 || got.TX.TargetHost != "100.64.0.5" || len(got.TX.Presets) != 1 || got.RX.TargetBufferMs != 50 ||
-		!got.TX.LocalVirtualMicEnabled || got.TX.LocalOutputDevice != "CABLE Input (VB-Audio Virtual Cable)" {
+		!got.TX.LocalVirtualMicEnabled || got.TX.LocalOutputDevice != "CABLE Input (VB-Audio Virtual Cable)" || got.Theme != ThemeModeLight {
 		t.Fatalf("loaded config mismatch: %+v", got)
 	}
 	vc := got.TX.VoiceChanger
@@ -97,5 +98,20 @@ func TestConfigLoadBackwardCompatibleLegacyVC(t *testing.T) {
 	if vc.ThroatFormant != def.ThroatFormant || vc.BrightFormant != def.BrightFormant ||
 		vc.Breathiness != def.Breathiness || vc.HighPassHz != def.HighPassHz || vc.DeEsser != def.DeEsser {
 		t.Fatalf("missing v3 VC fields should inherit defaults: got=%+v wantDefaults=%+v", vc, def)
+	}
+	if got.Theme != ThemeModeDark {
+		t.Fatalf("missing theme field should default to dark, got %q", got.Theme)
+	}
+
+	// Verify system theme persists cleanly and invalid values normalize to dark
+	cfgSys := Default()
+	cfgSys.Theme = ThemeModeSystem
+	sysPath := filepath.Join(dir, "sys.json")
+	if err := Save(sysPath, cfgSys); err != nil {
+		t.Fatalf("Save sys: %v", err)
+	}
+	gotSys, err := Load(sysPath)
+	if err != nil || gotSys.Theme != ThemeModeSystem {
+		t.Fatalf("expected ThemeModeSystem, got %q err=%v", gotSys.Theme, err)
 	}
 }
