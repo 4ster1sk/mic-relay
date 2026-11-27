@@ -9,10 +9,9 @@ import (
 	"io"
 	"log"
 	"os"
-	"runtime"
+	"runtime/debug"
 	"time"
 
-	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
 	"mic-relay/internal/audio"
@@ -75,6 +74,11 @@ func main() {
 		return
 	}
 
+	// Keep steady-state Go heap compact unless user explicitly configured GOGC.
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(50)
+	}
+
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
 		cfgPath = "mic-relay-config.json"
@@ -115,64 +119,56 @@ func main() {
 	jb := jitter.NewBuffer(protocol.SampleRate, cfg.RX.TargetBufferMs)
 
 	a := app.NewWithID("dev.antigravity.micrelay")
-	a.Settings().SetTheme(uiutil.NewAppTheme())
+	a.Settings().SetTheme(uiutil.NewIdleTheme())
 	a.SetIcon(uiutil.AppIcon())
 
-	osLabel := "Linux / PipeWire"
-	if runtime.GOOS == "windows" {
-		osLabel = "Windows / VB-Cable"
-	}
-	w := a.NewWindow(fmt.Sprintf("Mic Relay — 双方向マイク中継 (%s)", osLabel))
-	w.Resize(fyne.NewSize(700, 740))
-	w.SetIcon(uiutil.AppIcon())
-
 	ra := &RelayApp{
-		fyneApp:    a,
-		win:        w,
-		cfgPath:    cfgPath,
-		cfg:        cfg,
-		instanceID: instanceID,
-		txDSP:         txDSP,
-		rxDSP:         rxDSP,
-		denoiser:      denoiser,
-		voiceChanger:  voiceChanger,
-		jb:            jb,
-		capturer:      audio.NewCapturer(),
-		player:        audio.NewPlayer(),
+		fyneApp:        a,
+		cfgPath:        cfgPath,
+		cfg:            cfg,
+		instanceID:     instanceID,
+		txDSP:          txDSP,
+		rxDSP:          rxDSP,
+		denoiser:       denoiser,
+		voiceChanger:   voiceChanger,
+		jb:             jb,
+		capturer:       audio.NewCapturer(),
+		player:         audio.NewPlayer(),
 		monitorPlayer:  audio.NewPlayer(),
 		monitorBuf:     newMonitorRing(),
 		localOutPlayer: audio.NewPlayer(),
 		localOutBuf:    newMonitorRing(),
 		virtualMic:     audio.NewVirtualMic(),
-		sender:     netrelay.NewSender(instanceID),
-		receiver:   netrelay.NewReceiver(instanceID, cfg.RX.DisplayName, jb),
-		discovery:  netrelay.NewDiscoveryResponder(instanceID, cfg.RX.DisplayName, cfg.RX.ListenPort),
-		stopTicker: make(chan struct{}),
+		sender:         netrelay.NewSender(instanceID),
+		receiver:       netrelay.NewReceiver(instanceID, cfg.RX.DisplayName, jb),
+		discovery:      netrelay.NewDiscoveryResponder(instanceID, cfg.RX.DisplayName, cfg.RX.ListenPort),
+		stopTicker:     make(chan struct{}),
 	}
 
-	ra.buildUI()
+	ra.setPTTEnabled(cfg.TX.PushToTalk)
 	ra.applyStartupTab(opts)
-	ra.setupTrayAndClose()
+	ra.setupTray()
 
-	// Start live microphone monitoring so the input VU meter updates in real time even before TX starts,
-	// then apply optional CLI auto-start (-tx / -rx) or local virtual mic output without racing on capturer.
+	if !opts.minimized || ra.tray == nil {
+		if opts.minimized && ra.tray == nil {
+			log.Printf("system tray unavailable; starting with window visible")
+		}
+		ra.ensureWindowAndShow(false)
+	} else {
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			if !ra.winVisible.Load() && !ra.shuttingDown.Load() {
+				uiutil.ReleaseProcessMemory()
+			}
+		}()
+	}
+
+	// Start initial microphone monitoring (when needed) and optional CLI auto-start (-tx / -rx)
 	go ra.runStartupTasks(opts)
 
-	// Start periodic UI refresh (20Hz for smooth VU meters & live stats)
+	// Start periodic UI refresh (20Hz while window is visible; idle when parked in tray)
 	go ra.uiRefreshLoop()
 
-	// Kick off initial LAN/Tailscale discovery
-	go ra.refreshPeers()
-
-	if opts.minimized {
-		if ra.tray != nil {
-			a.Run()
-		} else {
-			log.Printf("system tray unavailable; starting with window visible")
-			w.ShowAndRun()
-		}
-	} else {
-		w.ShowAndRun()
-	}
+	a.Run()
 	ra.shutdown()
 }

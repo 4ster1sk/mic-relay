@@ -50,6 +50,10 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 	ra.rxMuteBtn = widget.NewButton("出力ミュート", func() {
 		ra.toggleRXMute()
 	})
+	if ra.rxDSP.IsMuted() {
+		ra.rxMuteBtn.SetText("🔇 ミュート中")
+		ra.rxMuteBtn.Importance = widget.DangerImportance
+	}
 
 	outItems := []fyne.CanvasObject{
 		container.NewBorder(nil, nil, widget.NewLabel("出力デバイス"), refreshOutBtn, ra.rxOutSelect),
@@ -160,6 +164,16 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 
 func (ra *RelayApp) selectedRawOutputDevice() string {
 	if ra.rxOutSelect == nil {
+		ra.cfgMu.Lock()
+		saved := ra.cfg.RX.OutputDevice
+		ra.cfgMu.Unlock()
+		if saved != "" {
+			return saved
+		}
+		// Match refreshOutputDevices default (ListPlaybackDevices sorts VB-Cable first).
+		if devs, err := audio.ListPlaybackDevices(); err == nil && len(devs) > 0 {
+			return devs[0].Name
+		}
 		return ""
 	}
 	sel := ra.rxOutSelect.Selected
@@ -173,6 +187,9 @@ func (ra *RelayApp) selectedRawOutputDevice() string {
 }
 
 func (ra *RelayApp) refreshOutputDevices() {
+	if ra.rxOutSelect == nil {
+		return
+	}
 	devs, err := audio.ListPlaybackDevices()
 	ra.rxDeviceMap = make(map[string]string)
 	if err != nil {
@@ -214,14 +231,16 @@ func (ra *RelayApp) refreshOutputDevices() {
 func (ra *RelayApp) toggleRXMute() {
 	next := !ra.rxDSP.IsMuted()
 	ra.rxDSP.SetMuted(next)
-	if next {
-		ra.rxMuteBtn.SetText("🔇 ミュート中")
-		ra.rxMuteBtn.Importance = widget.DangerImportance
-	} else {
-		ra.rxMuteBtn.SetText("出力ミュート")
-		ra.rxMuteBtn.Importance = widget.MediumImportance
+	if ra.rxMuteBtn != nil {
+		if next {
+			ra.rxMuteBtn.SetText("🔇 ミュート中")
+			ra.rxMuteBtn.Importance = widget.DangerImportance
+		} else {
+			ra.rxMuteBtn.SetText("出力ミュート")
+			ra.rxMuteBtn.Importance = widget.MediumImportance
+		}
+		ra.rxMuteBtn.Refresh()
 	}
-	ra.rxMuteBtn.Refresh()
 	ra.syncTrayState()
 }
 
@@ -234,12 +253,22 @@ func (ra *RelayApp) toggleRXStartStop() {
 		return
 	}
 
-	port, err := strconv.Atoi(strings.TrimSpace(ra.rxPortEntry.Text))
+	var port int
+	var err error
+	var dispName string
+	if ra.rxPortEntry != nil && ra.rxNameEntry != nil {
+		port, err = strconv.Atoi(strings.TrimSpace(ra.rxPortEntry.Text))
+		dispName = strings.TrimSpace(ra.rxNameEntry.Text)
+	} else {
+		ra.cfgMu.Lock()
+		port = ra.cfg.RX.ListenPort
+		dispName = strings.TrimSpace(ra.cfg.RX.DisplayName)
+		ra.cfgMu.Unlock()
+	}
 	if err != nil || port <= 0 || port > 65535 {
 		ra.showError("待受ポートエラー", fmt.Errorf("1〜65535 の有効なポート番号を入力してください"))
 		return
 	}
-	dispName := strings.TrimSpace(ra.rxNameEntry.Text)
 	if dispName == "" {
 		dispName = "mic-relay"
 	}
@@ -262,10 +291,12 @@ func (ra *RelayApp) toggleRXStartStop() {
 		}
 		ra.refreshOutputDevices()
 		targetDevice = audio.PipeWireVirtualSinkName
-		for label, raw := range ra.rxDeviceMap {
-			if raw == targetDevice {
-				ra.rxOutSelect.SetSelected(label)
-				break
+		if ra.rxOutSelect != nil {
+			for label, raw := range ra.rxDeviceMap {
+				if raw == targetDevice {
+					ra.rxOutSelect.SetSelected(label)
+					break
+				}
 			}
 		}
 	}

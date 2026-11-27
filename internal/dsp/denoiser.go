@@ -1,7 +1,7 @@
 package dsp
 
 import (
-	"fmt"
+	"log"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -24,47 +24,73 @@ func loadRNNoiseModel() (*rnnoise.Model, error) {
 }
 
 // Denoiser wraps Pure-Go RNNoise (48kHz / 480 samples = 10ms frames) with lock-free ON/OFF switching,
-// click-free crossfading on state transitions, and atomic VAD probability reporting.
+// click-free crossfading on state transitions, lazy model loading, and atomic VAD probability reporting.
 type Denoiser struct {
-	mu          sync.Mutex
-	inner       *rnnoise.Denoiser
-	enabled     atomic.Bool
-	wasEnabled  bool
-	vadBits     atomic.Uint32
-	inBuf       []float32
-	outBuf      []float32
-	frameSize   int
+	mu         sync.Mutex
+	sampleRate int
+	inner      *rnnoise.Denoiser
+	initFailed bool
+	enabled    atomic.Bool
+	wasEnabled bool
+	vadBits    atomic.Uint32
+	inBuf      []float32
+	outBuf     []float32
+	frameSize  int
 }
 
+// NewDenoiser creates a Denoiser whose RNNoise neural-network weights are loaded
+// lazily on the first enabled Process call so RX-only / idle sessions avoid
+// allocating the model in RAM.
 func NewDenoiser(sampleRate int, enabled bool) (*Denoiser, error) {
 	if sampleRate <= 0 {
 		sampleRate = 48000
 	}
-	m, err := loadRNNoiseModel()
-	if err != nil {
-		return nil, fmt.Errorf("rnnoise model load failed: %w", err)
+	fs := sampleRate / 100 // 10ms frame (480 samples @ 48kHz)
+	if fs <= 0 {
+		fs = 480
 	}
-	inner, err := rnnoise.New(rnnoise.Options{
-		SampleRate: sampleRate,
-		Model:      m,
-		Fast:       true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("rnnoise init failed: %w", err)
-	}
-	fs := inner.FrameSize()
 	d := &Denoiser{
-		inner:      inner,
+		sampleRate: sampleRate,
 		wasEnabled: enabled,
-		inBuf:      make([]float32, fs),
-		outBuf:     make([]float32, fs),
 		frameSize:  fs,
 	}
 	d.enabled.Store(enabled)
 	return d, nil
 }
 
+func (d *Denoiser) ensureInitLocked() bool {
+	if d.inner != nil {
+		return true
+	}
+	if d.initFailed {
+		return false
+	}
+	m, err := loadRNNoiseModel()
+	if err != nil {
+		log.Printf("rnnoise model load warning: %v", err)
+		d.initFailed = true
+		return false
+	}
+	inner, err := rnnoise.New(rnnoise.Options{
+		SampleRate: d.sampleRate,
+		Model:      m,
+		Fast:       true,
+	})
+	if err != nil {
+		log.Printf("rnnoise init warning: %v", err)
+		d.initFailed = true
+		return false
+	}
+	d.inner = inner
+	d.frameSize = inner.FrameSize()
+	d.inBuf = make([]float32, d.frameSize)
+	d.outBuf = make([]float32, d.frameSize)
+	return true
+}
+
 func (d *Denoiser) FrameSize() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.frameSize
 }
 
@@ -93,6 +119,17 @@ func (d *Denoiser) Process(samples []float32) {
 	defer d.mu.Unlock()
 
 	if !wantOn && !d.wasEnabled {
+		d.vadBits.Store(math.Float32bits(0))
+		return
+	}
+	if !wantOn && d.inner == nil {
+		// Disabled before model was ever loaded; no crossfade or model load needed.
+		d.wasEnabled = false
+		d.vadBits.Store(math.Float32bits(0))
+		return
+	}
+	if !d.ensureInitLocked() {
+		d.wasEnabled = false
 		d.vadBits.Store(math.Float32bits(0))
 		return
 	}

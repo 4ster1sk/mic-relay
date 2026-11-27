@@ -238,8 +238,13 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		ra.txLocalMicCheck,
 	}
 	if !autoPipeWireLocal {
-		ra.txLocalOutSelect = widget.NewSelect(nil, func(_ string) {
-			raw := ra.selectedRawLocalOutputDevice()
+		ra.txLocalOutSelect = widget.NewSelect(nil, func(sel string) {
+			raw := sel
+			if mapped, ok := ra.txLocalDeviceMap[sel]; ok {
+				raw = mapped
+			} else if strings.HasPrefix(sel, "(") {
+				raw = ""
+			}
 			ra.cfgMu.Lock()
 			prev := ra.cfg.TX.LocalOutputDevice
 			ra.cfg.TX.LocalOutputDevice = raw
@@ -425,6 +430,11 @@ func (ra *RelayApp) refreshInputDevices() {
 
 func (ra *RelayApp) refreshPeers() {
 	fyne.Do(func() {
+		ra.uiMu.Lock()
+		defer ra.uiMu.Unlock()
+		if ra.shuttingDown.Load() || !ra.winVisible.Load() {
+			return
+		}
 		if ra.txProbeLabel != nil {
 			ra.txProbeLabel.SetText("探索中...")
 		}
@@ -471,6 +481,11 @@ func (ra *RelayApp) refreshPeers() {
 	ra.txPeersMu.Unlock()
 
 	fyne.Do(func() {
+		ra.uiMu.Lock()
+		defer ra.uiMu.Unlock()
+		if ra.shuttingDown.Load() || !ra.winVisible.Load() {
+			return
+		}
 		if ra.txPeerTable != nil {
 			ra.txPeerTable.UnselectAll()
 			ra.txPeerTable.Refresh()
@@ -482,22 +497,30 @@ func (ra *RelayApp) refreshPeers() {
 }
 
 func (ra *RelayApp) probeCurrentTarget(host, portStr string) {
+	setProbeText := func(text string) {
+		fyne.Do(func() {
+			ra.uiMu.Lock()
+			defer ra.uiMu.Unlock()
+			if ra.shuttingDown.Load() || !ra.winVisible.Load() || ra.txProbeLabel == nil {
+				return
+			}
+			ra.txProbeLabel.SetText(text)
+		})
+	}
 	port, err := strconv.Atoi(portStr)
 	if host == "" || err != nil || port <= 0 || port > 65535 {
-		fyne.Do(func() { ra.txProbeLabel.SetText("有効なホストとポート (1〜65535) を入力してください") })
+		setProbeText("有効なホストとポート (1〜65535) を入力してください")
 		return
 	}
-	fyne.Do(func() { ra.txProbeLabel.SetText("疎通確認中...") })
+	setProbeText("疎通確認中...")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	pong, rttMs, err := netrelay.ProbePeer(ctx, ra.instanceID, host, port, 1500*time.Millisecond)
 	if err != nil {
-		fyne.Do(func() { ra.txProbeLabel.SetText("応答なし (タイムアウト/未起動)") })
+		setProbeText("応答なし (タイムアウト/未起動)")
 		return
 	}
-	fyne.Do(func() {
-		ra.txProbeLabel.SetText(fmt.Sprintf("疎通 OK: %s (%s) — RTT %.1f ms", pong.DisplayName, pong.OS, rttMs))
-	})
+	setProbeText(fmt.Sprintf("疎通 OK: %s (%s) — RTT %.1f ms", pong.DisplayName, pong.OS, rttMs))
 }
 
 func (ra *RelayApp) saveCurrentAsPreset() {
@@ -570,20 +593,16 @@ func (ra *RelayApp) selectedRawLocalOutputDevice() string {
 	if runtime.GOOS == "linux" && audio.VirtualMicSupported() {
 		return audio.PipeWireVirtualSinkName
 	}
-	if ra.txLocalOutSelect == nil {
-		ra.cfgMu.Lock()
-		dev := ra.cfg.TX.LocalOutputDevice
-		ra.cfgMu.Unlock()
+	ra.cfgMu.Lock()
+	dev := ra.cfg.TX.LocalOutputDevice
+	ra.cfgMu.Unlock()
+	if dev != "" {
 		return dev
 	}
-	sel := ra.txLocalOutSelect.Selected
-	if raw, ok := ra.txLocalDeviceMap[sel]; ok {
-		return raw
+	if devs, err := audio.ListPlaybackDevices(); err == nil && len(devs) > 0 {
+		return devs[0].Name
 	}
-	if strings.HasPrefix(sel, "(") {
-		return ""
-	}
-	return sel
+	return ""
 }
 
 func (ra *RelayApp) refreshLocalOutputDevices() {
@@ -702,9 +721,33 @@ func (ra *RelayApp) onCaptureFrame(frame []float32) {
 }
 
 func (ra *RelayApp) startMicMonitor() error {
+	ra.micMu.Lock()
+	defer ra.micMu.Unlock()
 	ra.capturer.Stop()
 	devName := ra.selectedInputDeviceName()
 	return ra.capturer.Start(devName, ra.onCaptureFrame)
+}
+
+func (ra *RelayApp) startMicMonitorIfNeeded() error {
+	ra.micMu.Lock()
+	defer ra.micMu.Unlock()
+	if ra.shuttingDown.Load() || ra.capturer.IsRunning() {
+		return nil
+	}
+	if !ra.winVisible.Load() && !ra.sender.IsRunning() && !ra.localOutActive.Load() && !ra.monitorEnabled.Load() {
+		return nil
+	}
+	devName := ra.selectedInputDeviceName()
+	return ra.capturer.Start(devName, ra.onCaptureFrame)
+}
+
+func (ra *RelayApp) stopIdleMicMonitor() {
+	ra.micMu.Lock()
+	defer ra.micMu.Unlock()
+	if !ra.winVisible.Load() && !ra.sender.IsRunning() && !ra.localOutActive.Load() && !ra.monitorEnabled.Load() {
+		ra.capturer.Stop()
+		ra.txDSP.ResetLevels()
+	}
 }
 
 func (ra *RelayApp) toggleTXStartStop() {
@@ -715,8 +758,18 @@ func (ra *RelayApp) toggleTXStartStop() {
 	if ra.receiver.IsRunning() {
 		return
 	}
-	host := strings.TrimSpace(ra.txHostEntry.Text)
-	port, err := strconv.Atoi(strings.TrimSpace(ra.txPortEntry.Text))
+	var host string
+	var port int
+	var err error
+	if ra.txHostEntry != nil && ra.txPortEntry != nil {
+		host = strings.TrimSpace(ra.txHostEntry.Text)
+		port, err = strconv.Atoi(strings.TrimSpace(ra.txPortEntry.Text))
+	} else {
+		ra.cfgMu.Lock()
+		host = strings.TrimSpace(ra.cfg.TX.TargetHost)
+		port = ra.cfg.TX.TargetPort
+		ra.cfgMu.Unlock()
+	}
 	if host == "" || err != nil || port <= 0 || port > 65535 {
 		ra.showError("送信先エラー", fmt.Errorf("有効な送信先ホストとポート (1〜65535) を指定してください"))
 		return
@@ -757,6 +810,7 @@ func (ra *RelayApp) toggleTXStartStop() {
 
 func (ra *RelayApp) stopTX() {
 	ra.sender.Stop()
+	ra.stopIdleMicMonitor()
 	if !ra.capturer.IsRunning() {
 		ra.txDSP.ResetLevels()
 	}

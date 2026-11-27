@@ -14,6 +14,9 @@ func TestDenoiserRNNoiseSuppressesWhiteNoiseAndTogglesCleanly(t *testing.T) {
 	if d.FrameSize() != 480 {
 		t.Fatalf("expected 480 frame size, got %d", d.FrameSize())
 	}
+	if d.inner != nil {
+		t.Fatalf("expected RNNoise model to be lazily loaded (nil until enabled Process)")
+	}
 
 	// 1. When OFF, audio passes through completely unchanged
 	orig := make([]float32, 480)
@@ -22,6 +25,9 @@ func TestDenoiserRNNoiseSuppressesWhiteNoiseAndTogglesCleanly(t *testing.T) {
 	}
 	buf := append([]float32(nil), orig...)
 	d.Process(buf)
+	if d.inner != nil {
+		t.Fatalf("expected RNNoise model to remain unloaded while disabled")
+	}
 	for i := range orig {
 		if buf[i] != orig[i] {
 			t.Fatalf("passthrough modified sample %d: got %f want %f", i, buf[i], orig[i])

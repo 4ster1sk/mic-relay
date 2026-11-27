@@ -2,13 +2,13 @@ package uiutil
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image/color"
 	"os"
 	"runtime"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
-	"github.com/go-text/typesetting/font"
 )
 
 // AppTheme provides a clean dark UI palette and automatic Japanese system font resolution.
@@ -21,6 +21,15 @@ func NewAppTheme() fyne.Theme {
 	return &AppTheme{
 		base:   theme.DefaultTheme(),
 		jpFont: findJapaneseFont(),
+	}
+}
+
+// NewIdleTheme returns a lightweight theme without loading any external Japanese
+// font bytes. Switching to this theme when the window is parked in the tray lets
+// Go GC the ~13MB system font buffer and triggers Fyne's internal font cache reset.
+func NewIdleTheme() fyne.Theme {
+	return &AppTheme{
+		base: theme.DefaultTheme(),
 	}
 }
 
@@ -114,8 +123,17 @@ func isValidSingleFaceFont(data []byte) bool {
 	if bytes.HasPrefix(data, []byte("ttcf")) {
 		return false
 	}
-	_, err := font.ParseTTF(bytes.NewReader(data))
-	return err == nil
+	// Validate SFNT single-face header without full-table parsing to avoid a ~10MB+ temporary spike.
+	tag := data[:4]
+	isSFNT := bytes.Equal(tag, []byte{0x00, 0x01, 0x00, 0x00}) ||
+		bytes.Equal(tag, []byte("OTTO")) ||
+		bytes.Equal(tag, []byte("true")) ||
+		bytes.Equal(tag, []byte("typ1"))
+	if !isSFNT {
+		return false
+	}
+	numTables := int(binary.BigEndian.Uint16(data[4:6]))
+	return numTables > 0 && len(data) >= 12+numTables*16
 }
 
 func loadFontResource(path string) fyne.Resource {

@@ -556,3 +556,86 @@ func TestApplyStartupTab(t *testing.T) {
 		t.Fatalf("expected TX tab (index 0) selected for -tx, got %d", ra.tabs.SelectedIndex())
 	}
 }
+
+func TestParkWindowToTrayAndRecreate(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+
+	cfg := config.Default()
+	cfg.ActiveTab = "rx"
+	jb := jitter.NewBuffer(protocol.SampleRate, 30)
+	denoiser, err := dsp.NewDenoiser(protocol.SampleRate, false)
+	if err != nil {
+		t.Fatalf("NewDenoiser failed: %v", err)
+	}
+
+	ra := &RelayApp{
+		fyneApp:        a,
+		cfgPath:        filepath.Join(t.TempDir(), "config.json"),
+		cfg:            cfg,
+		instanceID:     "test-park",
+		txDSP:          dsp.NewProcessor(protocol.SampleRate),
+		rxDSP:          dsp.NewProcessor(protocol.SampleRate),
+		denoiser:       denoiser,
+		voiceChanger:   dsp.NewVoiceChanger(protocol.SampleRate),
+		jb:             jb,
+		capturer:       audio.NewCapturer(),
+		player:         audio.NewPlayer(),
+		monitorPlayer:  audio.NewPlayer(),
+		monitorBuf:     newMonitorRing(),
+		localOutPlayer: audio.NewPlayer(),
+		localOutBuf:    newMonitorRing(),
+		virtualMic:     audio.NewVirtualMic(),
+		sender:         netrelay.NewSender("test-park"),
+		receiver:       netrelay.NewReceiver("test-park", "test", jb),
+		discovery:      netrelay.NewDiscoveryResponder("test-park", "test", 48101),
+		stopTicker:     make(chan struct{}),
+	}
+
+	// Open window for the first time
+	ra.ensureWindowAndShow(false)
+	if ra.win == nil || !ra.winVisible.Load() || ra.tabs == nil {
+		t.Fatalf("expected window and UI widgets to be created by ensureWindowAndShow")
+	}
+	if ra.tabs.SelectedIndex() != 1 {
+		t.Fatalf("expected RX tab restored from config, got %d", ra.tabs.SelectedIndex())
+	}
+
+	// Park to tray -> widget references must be released while keeping window handle valid for Windows SetTheme
+	ra.parkWindowToTray()
+	if ra.win == nil || ra.winVisible.Load() || ra.tabs != nil || ra.txHostEntry != nil || ra.rxMuteBtn != nil {
+		t.Fatalf("expected widget refs cleared and winVisible=false after parkWindowToTray")
+	}
+
+	// Tray actions while parked (headless) must work cleanly without panicking
+	ra.toggleTXMute()
+	if !ra.txDSP.IsMuted() {
+		t.Fatalf("expected TX muted via headless toggleTXMute")
+	}
+	ra.toggleRXMute()
+	if !ra.rxDSP.IsMuted() {
+		t.Fatalf("expected RX muted via headless toggleRXMute")
+	}
+	ra.setRNNoiseEnabled(true)
+	if !ra.denoiser.IsEnabled() {
+		t.Fatalf("expected denoiser enabled via headless setRNNoiseEnabled")
+	}
+	ra.setVoiceChangerEnabled(true)
+	if !ra.voiceChanger.IsEnabled() {
+		t.Fatalf("expected voice changer enabled via headless setVoiceChangerEnabled")
+	}
+
+	// Reopen window from tray -> UI recreated with preserved muted/enabled states
+	ra.ensureWindowAndShow(false)
+	if ra.win == nil || !ra.winVisible.Load() || ra.rxMuteBtn == nil {
+		t.Fatalf("expected window UI recreated by ensureWindowAndShow")
+	}
+	if ra.rxMuteBtn.Text != "🔇 ミュート中" {
+		t.Fatalf("expected recreated RX mute button to reflect muted state, got %q", ra.rxMuteBtn.Text)
+	}
+	if !ra.txRNNoiseCheck.Checked {
+		t.Fatalf("expected recreated RNNoise checkbox to reflect enabled state")
+	}
+
+	ra.shutdown()
+}

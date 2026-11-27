@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,10 @@ type peerRow struct {
 
 type RelayApp struct {
 	fyneApp    fyne.App
+	uiMu       sync.Mutex
+	micMu      sync.Mutex
 	win        fyne.Window
+	winVisible atomic.Bool
 	cfgPath    string
 	cfgMu      sync.Mutex
 	cfg        config.Config
@@ -484,11 +488,11 @@ func (ra *RelayApp) syncMenuState() {
 	ra.mainMenu.Refresh()
 }
 
-func (ra *RelayApp) setupTrayAndClose() {
+func (ra *RelayApp) setupTray() {
 	ra.tray = uiutil.SetupTray(ra.fyneApp, uiutil.TrayCallbacks{
 		OnShow: func() {
 			fyne.Do(func() {
-				uiutil.BringWindowToFront(ra.win)
+				ra.ensureWindowAndShow(true)
 			})
 		},
 		OnToggleTXMute: func() {
@@ -498,7 +502,7 @@ func (ra *RelayApp) setupTrayAndClose() {
 			fyne.Do(func() {
 				if ra.denoiser != nil {
 					next := !ra.denoiser.IsEnabled()
-					ra.txRNNoiseCheck.SetChecked(next)
+					ra.setRNNoiseEnabled(next)
 				}
 			})
 		},
@@ -522,21 +526,180 @@ func (ra *RelayApp) setupTrayAndClose() {
 			fyne.Do(func() { ra.fyneApp.Quit() })
 		},
 	})
+	ra.syncTrayState()
+}
 
-	ra.win.SetCloseIntercept(func() {
+func (ra *RelayApp) attachWindowCloseIntercept(w fyne.Window) {
+	if w == nil {
+		return
+	}
+	w.SetCloseIntercept(func() {
 		ra.cfgMu.Lock()
 		minToTray := ra.cfg.MinimizeToTray
 		ra.cfgMu.Unlock()
 
 		if minToTray && ra.tray != nil {
-			// Release any held PTT key/mouse before hiding window
-			ra.releasePTTHold()
-			ra.win.Hide()
+			ra.parkWindowToTray()
 			return
 		}
 		ra.shutdown()
 		ra.fyneApp.Quit()
 	})
+}
+
+func (ra *RelayApp) ensureWindowAndShow(resumeMic bool) {
+	ra.uiMu.Lock()
+	if ra.win != nil && ra.winVisible.Load() {
+		w := ra.win
+		ra.uiMu.Unlock()
+		uiutil.BringWindowToFront(w)
+		return
+	}
+
+	// Safe on Windows: either len(d.windows) == 0 (first open from --minimized)
+	// or ra.win is hidden with a valid non-nil GLFW viewport (w.view() != nil).
+	ra.fyneApp.Settings().SetTheme(uiutil.NewAppTheme())
+
+	created := false
+	if ra.win == nil {
+		osLabel := "Linux / PipeWire"
+		if runtime.GOOS == "windows" {
+			osLabel = "Windows / VB-Cable"
+		}
+		w := ra.fyneApp.NewWindow(fmt.Sprintf("Mic Relay — 双方向マイク中継 (%s)", osLabel))
+		w.Resize(fyne.NewSize(700, 740))
+		w.SetIcon(uiutil.AppIcon())
+		ra.win = w
+		ra.attachWindowCloseIntercept(w)
+		created = true
+	}
+
+	ra.buildUI()
+	ra.winVisible.Store(true)
+	w := ra.win
+	if created {
+		w.Show()
+		w.RequestFocus()
+	}
+	ra.uiMu.Unlock()
+
+	if !created {
+		uiutil.BringWindowToFront(w)
+	}
+
+	go ra.refreshPeers()
+	if resumeMic {
+		go func() {
+			if err := ra.startMicMonitorIfNeeded(); err != nil {
+				log.Printf("mic monitor resume warning: %v", err)
+			}
+		}()
+	}
+}
+
+// parkWindowToTray tears down the widget tree and main menu, hides the window
+// (keeping its GLFW handle valid so Windows SetTheme/setDarkMode never crashes),
+// drops the ~13MB Japanese font buffer and triggers Fyne's internal font/theme
+// cache reset via NewIdleTheme(), stops idle mic monitoring, and trims memory.
+func (ra *RelayApp) parkWindowToTray() {
+	ra.releasePTTHold()
+
+	ra.uiMu.Lock()
+	ra.winVisible.Store(false)
+	w := ra.win
+	ra.clearWidgetRefs()
+
+	if w != nil {
+		w.SetMainMenu(nil)
+		w.SetContent(container.NewWithoutLayout())
+		w.Hide()
+	}
+
+	// Switch to idle theme to drop the ~13MB Japanese font buffer and trigger
+	// Fyne's internal painter.ClearFontCache() + cache.ResetThemeCaches().
+	ra.fyneApp.Settings().SetTheme(uiutil.NewIdleTheme())
+	ra.uiMu.Unlock()
+
+	// Stop live mic VU monitoring while parked in tray unless actively needed.
+	ra.stopIdleMicMonitor()
+
+	// Wait briefly for Fyne's event loop to process the empty content/hide,
+	// then run FreeOSMemory (+ Windows working set trim).
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		if !ra.winVisible.Load() && !ra.shuttingDown.Load() {
+			uiutil.ReleaseProcessMemory()
+		}
+	}()
+}
+
+func (ra *RelayApp) clearWidgetRefs() {
+	ra.mainMenu = nil
+	ra.vcMenu = nil
+	ra.vcPresetItems = nil
+	ra.vcDialogSync = nil
+	ra.menuCodecPCM = nil
+	ra.menuCodecOpus96 = nil
+	ra.menuCodecOpus48 = nil
+	ra.menuVCEnable = nil
+	ra.menuVCLocalMon = nil
+	ra.menuMinToTray = nil
+
+	ra.txStripLabel = nil
+	ra.rxStripLabel = nil
+
+	ra.txMicSelect = nil
+	ra.txLoopWarnLabel = nil
+	ra.txVUMeter = nil
+	ra.txDBLabel = nil
+	ra.txVADLabel = nil
+	ra.txGainLabel = nil
+	ra.txRNNoiseCheck = nil
+	ra.txGateCheck = nil
+	ra.txGateLabel = nil
+	ra.txPTTCheck = nil
+	ra.txPTTBtn = nil
+	ra.txLocalMicCheck = nil
+	ra.txLocalOutSelect = nil
+	ra.txLocalDeviceMap = nil
+	ra.txPeerTable = nil
+	ra.txHostEntry = nil
+	ra.txPortEntry = nil
+	ra.txProbeLabel = nil
+	ra.txStartStopBtn = nil
+
+	ra.rxOutSelect = nil
+	ra.rxDeviceMap = nil
+	ra.rxPipeWireCheck = nil
+	ra.rxVUMeter = nil
+	ra.rxDBLabel = nil
+	ra.rxVolLabel = nil
+	ra.rxMuteBtn = nil
+	ra.rxPortEntry = nil
+	ra.rxNameEntry = nil
+	ra.rxBufSlider = nil
+	ra.rxBufLabel = nil
+	ra.rxDiagSource = nil
+	ra.rxDiagCodec = nil
+	ra.rxDiagBuf = nil
+	ra.rxDiagJitter = nil
+	ra.rxDiagLoss = nil
+	ra.rxDiagDrift = nil
+	ra.rxStartStopBtn = nil
+	ra.tabs = nil
+}
+
+func (ra *RelayApp) setRNNoiseEnabled(on bool) {
+	if ra.denoiser != nil {
+		ra.denoiser.SetEnabled(on)
+	}
+	ra.cfgMu.Lock()
+	ra.cfg.TX.NoiseSuppression = on
+	ra.cfgMu.Unlock()
+	if ra.txRNNoiseCheck != nil && ra.txRNNoiseCheck.Checked != on {
+		ra.txRNNoiseCheck.SetChecked(on)
+	}
+	ra.saveConfig()
 	ra.syncTrayState()
 }
 
@@ -593,20 +756,36 @@ func (ra *RelayApp) saveConfig() {
 }
 
 func (ra *RelayApp) applyStartupTab(opts cliOptions) {
-	if ra.tabs == nil {
-		return
-	}
 	switch {
 	case opts.startTX:
-		ra.tabs.SelectIndex(0)
+		ra.cfgMu.Lock()
+		ra.cfg.ActiveTab = "tx"
+		ra.cfgMu.Unlock()
+		if ra.tabs != nil {
+			ra.tabs.SelectIndex(0)
+		}
 	case opts.startRX:
-		ra.tabs.SelectIndex(1)
+		ra.cfgMu.Lock()
+		ra.cfg.ActiveTab = "rx"
+		ra.cfgMu.Unlock()
+		if ra.tabs != nil {
+			ra.tabs.SelectIndex(1)
+		}
 	}
 }
 
 func (ra *RelayApp) runStartupTasks(opts cliOptions) {
-	if err := ra.startMicMonitor(); err != nil {
-		log.Printf("initial mic monitor warning: %v", err)
+	ra.cfgMu.Lock()
+	localOn := ra.cfg.TX.LocalVirtualMicEnabled
+	ra.cfgMu.Unlock()
+
+	// Only open mic capture at startup when the window is visible (for VU meter),
+	// TX is auto-starting, or local virtual mic output is enabled (without RX).
+	needMic := ra.winVisible.Load() || opts.startTX || (localOn && !opts.startRX)
+	if needMic {
+		if err := ra.startMicMonitor(); err != nil {
+			log.Printf("initial mic monitor warning: %v", err)
+		}
 	}
 
 	switch {
@@ -625,9 +804,6 @@ func (ra *RelayApp) runStartupTasks(opts cliOptions) {
 			ra.toggleRXStartStop()
 		})
 	default:
-		ra.cfgMu.Lock()
-		localOn := ra.cfg.TX.LocalVirtualMicEnabled
-		ra.cfgMu.Unlock()
 		if localOn && !ra.receiver.IsRunning() && ra.capturer.IsRunning() {
 			if err := ra.startLocalVirtualMicOutput(); err != nil {
 				log.Printf("initial local virtual mic warning: %v", err)
@@ -640,7 +816,9 @@ func (ra *RelayApp) runStartupTasks(opts cliOptions) {
 
 func (ra *RelayApp) showError(title string, err error) {
 	log.Printf("%s: %v", title, err)
-	dialog.ShowError(fmt.Errorf("%s: %w", title, err), ra.win)
+	if ra.win != nil {
+		dialog.ShowError(fmt.Errorf("%s: %w", title, err), ra.win)
+	}
 }
 
 func setLabelTextIfChanged(lbl *widget.Label, text string) {
@@ -658,6 +836,9 @@ func (ra *RelayApp) uiRefreshLoop() {
 		case <-ra.stopTicker:
 			return
 		case <-ticker.C:
+			if !ra.winVisible.Load() {
+				continue
+			}
 			if !ra.uiRefreshPending.CompareAndSwap(false, true) {
 				continue
 			}
@@ -674,7 +855,7 @@ func (ra *RelayApp) uiRefreshLoop() {
 
 			fyne.Do(func() {
 				defer ra.uiRefreshPending.Store(false)
-				if ra.shuttingDown.Load() {
+				if ra.shuttingDown.Load() || !ra.winVisible.Load() || ra.win == nil {
 					return
 				}
 
