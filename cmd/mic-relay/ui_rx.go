@@ -80,7 +80,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 		container.NewBorder(nil, nil, widget.NewLabel("出力音量"), container.NewHBox(ra.rxVolLabel, ra.rxMuteBtn), volSlider),
 	)
 
-	outCard := widget.NewCard("1. 仮想マイク出力先", "", container.NewVBox(outItems...))
+	outCard := widget.NewCard("", "", container.NewVBox(outItems...))
 
 	// ---- Section 2: Listen & Buffer Settings ----
 	ra.rxPortEntry = widget.NewEntry()
@@ -112,7 +112,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 		ra.saveConfig()
 	})
 
-	listenCard := widget.NewCard("2. 待受・バッファ設定", "", container.NewVBox(
+	listenCard := widget.NewCard("", "", container.NewVBox(
 		container.NewGridWithColumns(2,
 			container.NewBorder(nil, nil, widget.NewLabel("待受ポート"), nil, ra.rxPortEntry),
 			container.NewBorder(nil, nil, widget.NewLabel("LAN 公開名"), nil, ra.rxNameEntry),
@@ -139,7 +139,7 @@ func (ra *RelayApp) buildRXTab() fyne.CanvasObject {
 		lbl.Truncation = fyne.TextTruncateEllipsis
 	}
 
-	diagCard := widget.NewCard("3. リアルタイム診断", "", container.NewGridWithColumns(3,
+	diagCard := widget.NewCard("", "", container.NewGridWithColumns(3,
 		ra.rxDiagSource,
 		ra.rxDiagCodec,
 		ra.rxDiagBuf,

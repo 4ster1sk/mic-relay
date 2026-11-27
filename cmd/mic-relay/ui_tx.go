@@ -270,7 +270,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		)
 	}
 
-	micCard := widget.NewCard("1. 入力マイク・音声処理", "", container.NewVBox(micCardItems...))
+	micCard := widget.NewCard("", "", container.NewVBox(micCardItems...))
 
 	// ---- Section 2: Destination Peer Aligned Table ----
 	headers := []string{"種別", "ホスト名 / 名前", "アドレス : ポート", "RTT"}
@@ -349,6 +349,9 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 	ra.txPortEntry.SetPlaceHolder("48101")
 	ra.txPortEntry.SetText(strconv.Itoa(ra.cfg.TX.TargetPort))
 
+	ra.txPeerStatusLabel = widget.NewLabel("")
+	ra.txPeerStatusLabel.Truncation = fyne.TextTruncateEllipsis
+
 	ra.txProbeLabel = widget.NewLabel("")
 	ra.txProbeLabel.Truncation = fyne.TextTruncateEllipsis
 
@@ -367,8 +370,8 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 		ra.deleteSelectedPreset()
 	})
 
-	destCard := widget.NewCard("2. 送信先ピア (LAN 自動検出 / プリセット)", "", container.NewVBox(
-		container.NewBorder(nil, nil, nil, container.NewHBox(rescanBtn, delPresetBtn), ra.txProbeLabel),
+	destCard := widget.NewCard("", "", container.NewVBox(
+		container.NewBorder(nil, nil, nil, container.NewHBox(rescanBtn, delPresetBtn), ra.txPeerStatusLabel),
 		tableWrap,
 		container.NewBorder(
 			nil, nil, nil,
@@ -379,6 +382,7 @@ func (ra *RelayApp) buildTXTab() fyne.CanvasObject {
 			),
 			ra.txHostEntry,
 		),
+		ra.txProbeLabel,
 	))
 
 	// ---- Primary Action ----
@@ -435,8 +439,8 @@ func (ra *RelayApp) refreshPeers() {
 		if ra.shuttingDown.Load() || !ra.winVisible.Load() {
 			return
 		}
-		if ra.txProbeLabel != nil {
-			ra.txProbeLabel.SetText("探索中...")
+		if ra.txPeerStatusLabel != nil {
+			ra.txPeerStatusLabel.SetText("探索中...")
 		}
 	})
 
@@ -490,8 +494,8 @@ func (ra *RelayApp) refreshPeers() {
 			ra.txPeerTable.UnselectAll()
 			ra.txPeerTable.Refresh()
 		}
-		if ra.txProbeLabel != nil {
-			ra.txProbeLabel.SetText(fmt.Sprintf("検出: LAN %d / Preset %d", len(lanPeers), len(presets)))
+		if ra.txPeerStatusLabel != nil {
+			ra.txPeerStatusLabel.SetText(fmt.Sprintf("検出: LAN %d / Preset %d", len(lanPeers), len(presets)))
 		}
 	})
 }

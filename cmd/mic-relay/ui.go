@@ -117,6 +117,7 @@ type RelayApp struct {
 	txSelectedRow     int
 	txHostEntry       *widget.Entry
 	txPortEntry       *widget.Entry
+	txPeerStatusLabel *widget.Label
 	txProbeLabel      *widget.Label
 	txStartStopBtn    *widget.Button
 
@@ -739,6 +740,7 @@ func (ra *RelayApp) clearWidgetRefs() {
 	ra.txPeerTable = nil
 	ra.txHostEntry = nil
 	ra.txPortEntry = nil
+	ra.txPeerStatusLabel = nil
 	ra.txProbeLabel = nil
 	ra.txStartStopBtn = nil
 
