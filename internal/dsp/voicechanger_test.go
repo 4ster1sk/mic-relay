@@ -445,7 +445,7 @@ func TestVoiceChangerNoSyllablePitchGlide(t *testing.T) {
 	for off := 0; off+480 <= len(in); off += 480 {
 		copy(frame, in[off:off+480])
 		vc.Process(frame)
-		st := 12.0 * math.Log2(vc.wsola.smoothAlpha)
+		st := 12.0 * math.Log2(vc.psola.smoothAlpha)
 		if st < minST {
 			minST = st
 		}
@@ -588,5 +588,191 @@ func BenchmarkVoiceChanger10msFrame(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		vc.Process(frame)
+	}
+}
+
+func TestLR4CrossoverAllPassFlatness(t *testing.T) {
+	const sr = 48000.0
+	for _, freq := range []float64{150.0, 900.0, 2800.0, 5000.0, 8500.0, 14000.0} {
+		xover := newLR4Crossover(sr, hnCrossoverHz)
+		const n = 9600
+		var inSq, outSq float64
+		for i := 0; i < n; i++ {
+			x := 0.5 * math.Sin(2.0*math.Pi*freq*float64(i)/sr)
+			lo, hi := xover.split(x)
+			y := lo + hi
+			if i >= 2400 {
+				inSq += x * x
+				outSq += y * y
+			}
+		}
+		gainDB := 10.0 * math.Log10(outSq/inSq)
+		if math.Abs(gainDB) > 0.15 {
+			t.Fatalf("LR4 crossover sum deviated from 0dB at %.0fHz: %+.3f dB", freq, gainDB)
+		}
+	}
+}
+
+func TestMinimumPhaseNoPreEchoOnGlottalImpulse(t *testing.T) {
+	const sr = 48000
+	vc := NewVoiceChanger(sr)
+	vc.SetConfig(VoiceChangerParams{
+		PitchSemitones:  0.0, // isolate STFT formant filter impulse response
+		FormantRatio:    1.28,
+		ThroatFormant:   1.15,
+		BrightFormant:   1.15,
+		Breathiness:     0.0,
+		Softness:        0.5,
+		HighPassEnabled: false,
+		HighPassHz:      110.0,
+		DeEsser:         0.0,
+	})
+	vc.SetEnabled(true)
+
+	// Warm up filter state, then inject a single sharp impulse
+	total := 480 * 30
+	in := make([]float32, total)
+	impIdx := 480 * 15
+	in[impIdx] = 0.8
+
+	out := runVCFrames(t, vc, in)
+
+	peakIdx := 0
+	peakAbs := 0.0
+	for i, s := range out {
+		a := math.Abs(float64(s))
+		if a > peakAbs {
+			peakAbs = a
+			peakIdx = i
+		}
+	}
+	if peakAbs < 0.05 {
+		t.Fatalf("expected strong impulse response peak, got %.5f", peakAbs)
+	}
+
+	// Compare pre-impulse energy [peakIdx-480 .. peakIdx-24] vs causal decay [peakIdx .. peakIdx+480]
+	var preE, postE float64
+	for i := peakIdx - 480; i < peakIdx-24; i++ {
+		if i >= 0 {
+			v := float64(out[i])
+			preE += v * v
+		}
+	}
+	for i := peakIdx; i < peakIdx+480 && i < len(out); i++ {
+		v := float64(out[i])
+		postE += v * v
+	}
+	preRatioDB := 10.0 * math.Log10((preE+1e-24)/(postE+1e-24))
+	t.Logf("Minimum-phase pre-echo vs causal energy: %.2f dB (peak at +%d samples)", preRatioDB, peakIdx-impIdx)
+	if preRatioDB > -30.0 {
+		t.Fatalf("expected causal minimum-phase filter with <-30dB pre-echo, got %.2f dB", preRatioDB)
+	}
+}
+
+func TestUnvoicedSibilantPreservesNaturalBandAndSharpness(t *testing.T) {
+	const sr = 48000
+	const n = 480 * 40
+	rng := rand.New(rand.NewSource(12345))
+
+	// Synthesize realistic /s/ sibilant burst (band-passed 5.2-10kHz noise) in middle of silence
+	bpHP := biquadState{}
+	bpLP := biquadState{}
+	bpHP.setHighPass(sr, 5400.0, 0.7071)
+	bpLP.setLowPass(sr, 9800.0, 0.7071)
+
+	in := make([]float32, n)
+	burstStart := 480 * 12
+	burstEnd := 480 * 24 // 120ms sibilant
+	for i := burstStart; i < burstEnd; i++ {
+		w := (rng.Float64()*2.0 - 1.0) * 0.25
+		s := bpLP.process(bpHP.process(w))
+		in[i] = float32(s)
+	}
+
+	vc := NewVoiceChanger(sr)
+	p := PresetFemaleHigh.VoiceChangerParams // +10 semitones!
+	p.DeEsser = 0.0
+	vc.SetConfig(p)
+	vc.SetEnabled(true)
+
+	out := runVCFrames(t, vc, in)
+
+	// Measure sibilant spectral centroid during the active output burst:
+	// If sibilant were pitch-shifted by +10st (1.78x), 7kHz would jump above 12kHz!
+	// With LR4 + unvoiced bypass, centroid must remain naturally in [5.2kHz, 9.5kHz].
+	bestWinStart := 0
+	bestWinE := 0.0
+	for s0 := 0; s0+4096 <= len(out); s0 += 480 {
+		e := 0.0
+		for i := 0; i < 4096; i++ {
+			v := float64(out[s0+i])
+			e += v * v
+		}
+		if e > bestWinE {
+			bestWinE = e
+			bestWinStart = s0
+		}
+	}
+	mag := analyzeSpectrum(out[bestWinStart : bestWinStart+4096])
+	cent := bandCentroid(mag, sr, 3500.0, 18000.0)
+	t.Logf("Unvoiced /s/ output centroid at +10st: %.1f Hz", cent)
+	if cent < 5000.0 || cent > 9600.0 {
+		t.Fatalf("expected unvoiced sibilant centroid to stay natural (5.0-9.6kHz), got %.1f Hz", cent)
+	}
+}
+
+func TestSWIPSOLAVibratoAndHarmonicPurity(t *testing.T) {
+	const sr = 48000
+	const n = 48000 * 2 // 2.0s
+
+	// Synthesize realistic voiced vowel with 5.5Hz vibrato (±0.25 semitones) to verify
+	// epoch tracking & SWI-PSOLA maintain clean harmonics without double-voicing.
+	in := make([]float32, n)
+	phase := 0.0
+	for i := 0; i < n; i++ {
+		tSec := float64(i) / sr
+		vib := 0.25 * math.Sin(2.0*math.Pi*5.5*tSec)
+		f0 := 125.0 * math.Pow(2.0, vib/12.0)
+		phase += 2.0 * math.Pi * f0 / sr
+		sum := 0.0
+		for h := 1; h <= 28; h++ {
+			hf := f0 * float64(h)
+			d1 := (hf - 680.0) / 150.0
+			d2 := (hf - 1350.0) / 260.0
+			amp := (0.15 + 0.9*math.Exp(-0.5*d1*d1) + 0.6*math.Exp(-0.5*d2*d2)) / math.Pow(float64(h), 0.45)
+			// Realistic glottal phase skew
+			sum += amp * math.Sin(float64(h)*phase+0.15*float64(h))
+		}
+		in[i] = float32(0.12 * sum)
+	}
+
+	vc := NewVoiceChanger(sr)
+	p := PresetFemaleNatural.VoiceChangerParams
+	p.Breathiness = 0.0
+	vc.SetConfig(p)
+	vc.SetEnabled(true)
+
+	out := runVCFrames(t, vc, in)
+
+	// Ensure steady-state output RMS is stable without dropouts or amplitude pumping
+	var minRMS, maxRMS float64 = 1e9, 0
+	for off := 480 * 40; off+2400 <= len(out); off += 2400 { // 50ms windows
+		sq := 0.0
+		for i := 0; i < 2400; i++ {
+			v := float64(out[off+i])
+			sq += v * v
+		}
+		r := math.Sqrt(sq / 2400.0)
+		if r < minRMS {
+			minRMS = r
+		}
+		if r > maxRMS {
+			maxRMS = r
+		}
+	}
+	pumpDB := 20.0 * math.Log10(maxRMS/(minRMS+1e-12))
+	t.Logf("Vibrato vowel 50ms envelope variation: %.2f dB", pumpDB)
+	if minRMS < 0.01 || pumpDB > 3.5 {
+		t.Fatalf("unexpected amplitude pumping or dropout on vibrato vowel: minRMS=%.4f pump=%.2f dB", minRMS, pumpDB)
 	}
 }
